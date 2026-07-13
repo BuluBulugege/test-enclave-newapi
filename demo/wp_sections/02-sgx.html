@@ -1,0 +1,177 @@
+<section class="wp" id="s-02">
+  <h2>2 · SGX Enclave / 机密计算</h2>
+
+  <p>本系统的安全根基不是"我们承诺不看你的数据"，而是"我们<strong>在物理上看不到</strong>你的数据"。支撑它的硬件机制是 <strong>Intel SGX（Software Guard Extensions）</strong>：CPU 在自己内部划出一块受硬件保护的隔离区——<strong>enclave（飞地）</strong>，其代码与数据驻留在一段被 CPU 实时加密的物理内存 <strong>EPC（Enclave Page Cache）</strong>里。明文只在 CPU 封装（package）内部——缓存、寄存器——短暂存在；一旦写回物理内存 DRAM 或流经内存总线，全部是密文。</p>
+
+  <p>关键在于<strong>谁持有解密密钥</strong>：EPC 的加密密钥由 CPU 在每次上电时随机生成，只存在于芯片内部，<strong>永不写入 DRAM、永不暴露给任何软件</strong>。因此无论攻击者拥有多高的软件特权（root、内核、hypervisor），还是掌握整台物理机（云厂商、运维、机房），他们能触及的都只是一段无意义的密文——<strong>特权不等于可读</strong>。这与传统隔离有本质区别：进程隔离、虚拟机隔离都依赖 OS / hypervisor 这个"更高特权层"来执行，而 <strong>OS 与 hypervisor 恰恰是 SGX 明确不信任的对象</strong>。</p>
+
+  <h3>2.1 明文 vs 密文：同一台机器里的两块内存</h3>
+  <p>下图对比同一台主机上两种内存的可读性。左边是普通进程内存：prompt、API Key、响应都以明文躺在 DRAM 里，任何特权角色一条 <code>gdb</code> / <code>dd</code> / 内存快照就能整块 dump。右边是 enclave 的 EPC：同样这三个角色伸手去读，只会拿到 CPU 实时加密后的密文，被挡在 CPU 加密边界之外；<strong>唯一能看到明文的，是运行在 enclave 内部、且被度量过的那段代码</strong>。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 720 440" width="100%" style="max-width:720px" role="img" aria-label="普通进程内存与 Enclave EPC 对特权角色的可读性对比">
+      <rect x="0" y="0" width="720" height="440" fill="#fff"/>
+      <defs>
+        <marker id="ahRed1" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8 Z" fill="#dc2626"/></marker>
+      </defs>
+
+      <text x="24" y="26" font-size="14" font-weight="700" fill="#0f1222">同一台物理主机 · 同一颗 CPU（root / OS / hypervisor / 云厂商都在机器之内）</text>
+      <rect x="16" y="42" width="688" height="352" rx="12" fill="#fff" stroke="#cbd0e0" stroke-width="1.5"/>
+
+      <!-- 中央：特权角色 -->
+      <text x="360" y="82" font-size="12.5" fill="#6b7188" text-anchor="middle">特权角色 · 都在信任边界外</text>
+      <rect x="286" y="98" width="148" height="62" rx="10" fill="#f6f7fb" stroke="#6b7188" stroke-width="1.5"/>
+      <text x="360" y="124" font-size="13" font-weight="700" fill="#0f1222" text-anchor="middle">root / 超级用户</text>
+      <text x="360" y="144" font-size="11" fill="#6b7188" text-anchor="middle">👁 想读你的内存</text>
+      <rect x="286" y="178" width="148" height="62" rx="10" fill="#f6f7fb" stroke="#6b7188" stroke-width="1.5"/>
+      <text x="360" y="204" font-size="13" font-weight="700" fill="#0f1222" text-anchor="middle">OS 内核 / 驱动</text>
+      <text x="360" y="224" font-size="11" fill="#6b7188" text-anchor="middle">👁 拥有全部权限</text>
+      <rect x="286" y="258" width="148" height="62" rx="10" fill="#f6f7fb" stroke="#6b7188" stroke-width="1.5"/>
+      <text x="360" y="284" font-size="13" font-weight="700" fill="#0f1222" text-anchor="middle">Hypervisor / 云厂商</text>
+      <text x="360" y="304" font-size="11" fill="#6b7188" text-anchor="middle">👁 可做内存快照</text>
+
+      <!-- 左：普通进程内存（明文） -->
+      <rect x="36" y="98" width="210" height="222" rx="10" fill="#fdeaea" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="141" y="120" font-size="13.5" font-weight="700" fill="#b91c1c" text-anchor="middle">普通进程内存（明文）</text>
+      <text x="141" y="137" font-size="11" fill="#b91c1c" text-anchor="middle">明文直接躺在 DRAM 里</text>
+      <rect x="50" y="148" width="182" height="32" rx="6" fill="#fff" stroke="#f0b4b4"/>
+      <text x="58" y="169" font-size="12" fill="#0f1222">prompt：我的体检报告…</text>
+      <rect x="50" y="186" width="182" height="32" rx="6" fill="#fff" stroke="#f0b4b4"/>
+      <text x="58" y="207" font-size="12" fill="#0f1222">api_key：sk-live-9f2c…</text>
+      <rect x="50" y="224" width="182" height="32" rx="6" fill="#fff" stroke="#f0b4b4"/>
+      <text x="58" y="245" font-size="12" fill="#0f1222">response：诊断建议…</text>
+      <text x="141" y="292" font-size="11" fill="#b91c1c" text-anchor="middle">root / 内核可直接 dump 明文</text>
+
+      <!-- 右：Enclave EPC（CPU 加密） -->
+      <rect x="474" y="98" width="210" height="222" rx="10" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.5"/>
+      <line x1="474" y1="98" x2="474" y2="320" stroke="#0ea5a4" stroke-width="5"/>
+      <text x="579" y="120" font-size="13.5" font-weight="700" fill="#15803d" text-anchor="middle">Enclave EPC（CPU 加密）</text>
+      <text x="579" y="137" font-size="11" fill="#15803d" text-anchor="middle">离开 CPU 缓存即为密文</text>
+      <rect x="492" y="148" width="180" height="32" rx="6" fill="#fff" stroke="#a9dcbb"/>
+      <text x="500" y="169" font-size="12" fill="#6b7188">9F A3 C2 7E 1B 04 …</text>
+      <rect x="492" y="186" width="180" height="32" rx="6" fill="#fff" stroke="#a9dcbb"/>
+      <text x="500" y="207" font-size="12" fill="#6b7188">B1 88 DE 5A 6C 90 …</text>
+      <rect x="492" y="224" width="180" height="32" rx="6" fill="#eef0fe" stroke="#4f46e5"/>
+      <text x="500" y="244" font-size="11.5" fill="#4f46e5">enclave 内代码 👁 可读明文</text>
+      <text x="579" y="292" font-size="11" fill="#15803d" text-anchor="middle">密钥在 CPU 内 · 从不进 DRAM</text>
+
+      <!-- 左箭头：读到明文 -->
+      <line x1="286" y1="129" x2="250" y2="129" stroke="#dc2626" stroke-width="2" marker-end="url(#ahRed1)"/>
+      <line x1="286" y1="209" x2="250" y2="209" stroke="#dc2626" stroke-width="2" marker-end="url(#ahRed1)"/>
+      <line x1="286" y1="289" x2="250" y2="289" stroke="#dc2626" stroke-width="2" marker-end="url(#ahRed1)"/>
+      <text x="267" y="122" font-size="12" text-anchor="middle">👁</text>
+      <text x="267" y="202" font-size="12" text-anchor="middle">👁</text>
+      <text x="267" y="282" font-size="12" text-anchor="middle">👁</text>
+
+      <!-- 右箭头：被 CPU 加密边界挡住 -->
+      <line x1="434" y1="129" x2="462" y2="129" stroke="#dc2626" stroke-width="2" marker-end="url(#ahRed1)"/>
+      <line x1="434" y1="209" x2="462" y2="209" stroke="#dc2626" stroke-width="2" marker-end="url(#ahRed1)"/>
+      <line x1="434" y1="289" x2="462" y2="289" stroke="#dc2626" stroke-width="2" marker-end="url(#ahRed1)"/>
+      <text x="470" y="134" font-size="14" text-anchor="middle">❌</text>
+      <text x="470" y="214" font-size="14" text-anchor="middle">❌</text>
+      <text x="470" y="294" font-size="14" text-anchor="middle">❌</text>
+
+      <text x="360" y="354" font-size="12" fill="#6b7188" text-anchor="middle">结论：敏感数据放进 EPC，特权软件层与云厂商都只拿到密文</text>
+
+      <!-- 图例 -->
+      <rect x="24" y="406" width="16" height="14" rx="3" fill="#fdeaea" stroke="#dc2626"/>
+      <text x="46" y="417" font-size="12" fill="#6b7188">明文 / 暴露</text>
+      <rect x="150" y="406" width="16" height="14" rx="3" fill="#e7f6ec" stroke="#16a34a"/>
+      <text x="172" y="417" font-size="12" fill="#6b7188">加密 / 受保护</text>
+      <line x1="290" y1="413" x2="316" y2="413" stroke="#0ea5a4" stroke-width="5"/>
+      <text x="322" y="417" font-size="12" fill="#6b7188">CPU 加密边界（MEE）</text>
+      <text x="520" y="417" font-size="12" fill="#6b7188">👁 可读明文    ❌ 只见密文</text>
+    </svg>
+    <figcaption>同一台主机内两块内存：普通进程内存对特权角色全暴露（明文），Enclave EPC 只回以密文——唯有 enclave 内代码能读明文。</figcaption>
+  </figure>
+
+  <h3>2.2 加密发生在哪里：MEE 与内存总线</h3>
+  <p>"内存被 CPU 加密"的具体含义是：CPU 封装内的<strong>内存加密引擎（MEE，Memory Encryption Engine）</strong>坐在缓存与内存控制器之间。enclave 的数据写出 CPU 时被 MEE 加密并附加完整性校验（防篡改、防重放）；读回时先在 CPU 内解密、校验，才交给 enclave 代码。于是明文的整个生命周期被牢牢锁在 CPU 封装这条边界之内。</p>
+  <p>这带来两层防护：其一，<strong>软件层</strong>——OS / hypervisor 即便映射并读取 enclave 的物理页，看到的也只是密文；其二，<strong>物理层</strong>——总线探针、恶意 DMA、冷启动（cold-boot）攻击、乃至直接拔走内存条，截获到的同样是密文。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 720 360" width="100%" style="max-width:720px" role="img" aria-label="内存加密引擎与内存总线：明文仅存在于 CPU 封装内">
+      <rect x="0" y="0" width="720" height="360" fill="#fff"/>
+      <defs>
+        <marker id="ahTeal2" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8 Z" fill="#0ea5a4"/></marker>
+        <marker id="ahBrand2" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8 Z" fill="#4f46e5"/></marker>
+        <marker id="ahRed2" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto"><path d="M0,0 L9,4 L0,8 Z" fill="#dc2626"/></marker>
+      </defs>
+
+      <text x="24" y="26" font-size="14" font-weight="700" fill="#0f1222">内存被 CPU 实时加密：明文只在 CPU 封装内，DRAM 与总线只有密文</text>
+
+      <!-- CPU 封装 -->
+      <rect x="28" y="44" width="356" height="250" rx="12" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="46" y="68" font-size="13" font-weight="700" fill="#4f46e5">CPU 封装（Package）· 信任边界</text>
+
+      <rect x="52" y="86" width="180" height="94" rx="8" fill="#fff" stroke="#4f46e5"/>
+      <text x="142" y="112" font-size="12.5" font-weight="700" fill="#0f1222" text-anchor="middle">Enclave 代码 + 明文数据</text>
+      <text x="142" y="134" font-size="11" fill="#6b7188" text-anchor="middle">仅存于缓存 / 寄存器</text>
+      <text x="142" y="154" font-size="11" fill="#6b7188" text-anchor="middle">明文永不离开芯片</text>
+
+      <rect x="52" y="196" width="180" height="74" rx="8" fill="#f6f7fb" stroke="#6b7188"/>
+      <text x="142" y="220" font-size="12" font-weight="700" fill="#0f1222" text-anchor="middle">🔑 内存加密密钥</text>
+      <text x="142" y="240" font-size="11" fill="#6b7188" text-anchor="middle">上电随机生成</text>
+      <text x="142" y="258" font-size="11" fill="#6b7188" text-anchor="middle">仅存 CPU 内 · 永不出芯片</text>
+
+      <rect x="250" y="108" width="118" height="146" rx="8" fill="#0ea5a4" stroke="#0e7f7e" stroke-width="1.5"/>
+      <text x="309" y="150" font-size="14" font-weight="700" fill="#ffffff" text-anchor="middle">MEE</text>
+      <text x="309" y="170" font-size="11" fill="#e6fffb" text-anchor="middle">内存加密引擎</text>
+      <text x="309" y="196" font-size="10.5" fill="#e6fffb" text-anchor="middle">写：加密 + 完整性</text>
+      <text x="309" y="214" font-size="10.5" fill="#e6fffb" text-anchor="middle">读：解密 + 校验</text>
+
+      <line x1="232" y1="132" x2="248" y2="150" stroke="#4f46e5" stroke-width="2" marker-end="url(#ahBrand2)"/>
+      <line x1="232" y1="224" x2="248" y2="212" stroke="#4f46e5" stroke-width="2" marker-end="url(#ahBrand2)"/>
+      <text x="238" y="122" font-size="10.5" fill="#4f46e5">明文</text>
+      <text x="236" y="244" font-size="10.5" fill="#6b7188">密钥</text>
+
+      <!-- 内存总线 -->
+      <line x1="368" y1="180" x2="466" y2="180" stroke="#0ea5a4" stroke-width="3" marker-end="url(#ahTeal2)"/>
+      <text x="418" y="168" font-size="11.5" font-weight="700" fill="#0f1222" text-anchor="middle">总线：密文</text>
+
+      <!-- DRAM -->
+      <rect x="472" y="96" width="214" height="168" rx="12" fill="#e7f6ec" stroke="#16a34a" stroke-width="2"/>
+      <text x="490" y="120" font-size="13" font-weight="700" fill="#15803d">物理内存 DRAM（含 EPC）</text>
+      <rect x="490" y="132" width="178" height="26" rx="5" fill="#fff" stroke="#a9dcbb"/>
+      <text x="498" y="150" font-size="11.5" fill="#6b7188">9F A3 C2 7E 1B 04 5D …</text>
+      <rect x="490" y="164" width="178" height="26" rx="5" fill="#fff" stroke="#a9dcbb"/>
+      <text x="498" y="182" font-size="11.5" fill="#6b7188">B1 88 DE 5A 6C 90 22 …</text>
+      <rect x="490" y="196" width="178" height="26" rx="5" fill="#fff" stroke="#a9dcbb"/>
+      <text x="498" y="214" font-size="11.5" fill="#6b7188">7C 4E A0 F3 19 8B 6E …</text>
+      <text x="579" y="248" font-size="11" fill="#15803d" text-anchor="middle">拔内存条 / 冷启动也只是密文</text>
+
+      <!-- 攻击者监听总线 -->
+      <line x1="420" y1="298" x2="420" y2="192" stroke="#dc2626" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#ahRed2)"/>
+      <text x="446" y="200" font-size="13" fill="#dc2626">❌ 看不到明文</text>
+      <rect x="330" y="300" width="180" height="46" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="420" y="320" font-size="12" font-weight="700" fill="#b91c1c" text-anchor="middle">总线探针 / DMA / 窃取内存条</text>
+      <text x="420" y="338" font-size="11" fill="#b91c1c" text-anchor="middle">👁 只截获密文</text>
+    </svg>
+    <figcaption>明文仅存在于 CPU 封装内；经 MEE 加密后写入 DRAM，内存总线、DMA、冷启动、乃至拔走内存条都只能得到密文。</figcaption>
+  </figure>
+
+  <h3>2.3 反转的信任模型：谁能读到明文</h3>
+  <p>SGX 把传统信任链<strong>反转</strong>了：以往你必须信任 OS、hypervisor、云平台"不作恶"；在 SGX 下，这些层被移出可信基（TCB），可信基收缩到"CPU 硬件 + enclave 内那段可审计代码"。下表列出各角色对两类内存的可读性。</p>
+
+  <table class="wp-t">
+    <thead><tr><th>角色</th><th>普通进程内存（明文）</th><th>Enclave EPC</th></tr></thead>
+    <tbody>
+      <tr><td>root / 超级用户</td><td>可读明文</td><td>仅密文</td></tr>
+      <tr><td>OS 内核 / 驱动</td><td>可读明文</td><td>仅密文</td></tr>
+      <tr><td>Hypervisor / VMM</td><td>可读明文</td><td>仅密文</td></tr>
+      <tr><td>云厂商 / 运维（内存快照）</td><td>可读明文</td><td>仅密文</td></tr>
+      <tr><td>物理攻击（总线探针 / 冷启动 / 拔内存条）</td><td>可读明文</td><td>仅密文</td></tr>
+      <tr><td>enclave 内被度量的代码</td><td>—</td><td>唯一可读明文</td></tr>
+    </tbody>
+  </table>
+
+  <h3>2.4 在本系统中的落地</h3>
+  <p>我们把 AI 请求的热路径——<strong>relay-core</strong>——整体放进 enclave，用 <strong>Gramine-SGX 1.9</strong> 这个 LibOS 把 Go 二进制无改造地跑进 SGX。远程认证走 <strong>DCAP（Data Center Attestation Primitives）</strong>：CPU 出具的 quote 内嵌 <strong>MRENCLAVE</strong>——对 enclave 初始代码页与配置（manifest）算出的度量指纹。本系统当前的度量值为：</p>
+  <p><code>MRENCLAVE = e5c301b5f4256e086d9ea074e72da445d10a48323e5bc6139992ef995bd9b36a</code></p>
+  <p>RA-TLS 把这份硬件身份绑定到网络通道：enclave 在内部生成 TLS 密钥后，将 <code>report_data = SHA-512(TLS SubjectPublicKeyInfo)</code> 写进 quote，客户端据此确认"正在和我通话的这条 TLS，其私钥就活在被认证的 enclave 内部"（详见第 3、4 节）。</p>
+  <p>与之对照，<strong>new-api 是不可信的控制面（control plane）</strong>，运行在 enclave 之外的普通宿主进程里。它只做元数据决策——用哪个渠道、扣多少 token——跨越信任边界流向它的<strong>只有 {model, token}，prompt 正文永不外泄</strong>。enclave 拿到路由决策后，直接对官方上游发起严格 TLS 连接：OpenAI（Bearer）、OpenRouter（Bearer + HTTP-Referer / X-Title）、Anthropic（x-api-key + anthropic-version）、Gemini / AI Studio（x-goog-api-key）。</p>
+  <p>为了让 MRENCLAVE 可被任何人独立复算，构建被固定为<strong>可复现构建（reproducible build）</strong>：锁定 <strong>Go 1.26.1 + Gramine 1.9</strong> 及基础镜像，两次编译得到字节一致的二进制，从而收敛到同一 MRENCLAVE——指纹因此可以脱离对发布者的信任而被验证。</p>
+
+  <h3>2.5 诚实边界</h3>
+  <p>SGX 不是绝对黑箱。EPC 的加密与完整性保护针对的是"读明文 / 篡改内存"这类威胁；历史上存在针对 SGX 的<strong>微架构侧信道（side-channel）</strong>研究（如缓存时序、瞬态执行类）。DCAP 的 TCB 状态检查能缓解"微码 / 平台过期"一类风险，但侧信道属于另一层持续演进的风险面。本节的所有结论都以"客户端确实完成了远程认证与度量比对"为前提——不验，则一切回到纯粹的信任。</p>
+</section>

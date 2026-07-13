@@ -1,0 +1,149 @@
+<section class="wp" id="s-05">
+  <h2>5 · 认证签名链到 Intel 根 CA</h2>
+
+  <p>第 4 节的纯 Python 验证器只做了三件"轻活":取回 quote、按固定偏移切出 <b>MRENCLAVE</b> 与 <b>report_data</b>、比对哈希。它把结论诚实地标成 <b>PARTIAL PASS</b>,因为它<b>没有</b>回答最关键的问题:凭什么这份 quote 是真的、而不是运营方自己编出来的一堆字节?一个能控制整台宿主机的攻击者,完全可以伪造一段结构合法、MRENCLAVE 与 report_data 都"对得上"的假 quote,骗过 Check 1–3。真正让伪造不可能的,是本节要讲的<b>认证签名链</b>——一条从 quote 一路上溯、最终锚定在 <b>Intel SGX Root CA</b> 的密码学签名链。</p>
+
+  <h3>5.1 谁给 quote 签名:从 Quoting Enclave 到 PCK</h3>
+  <p>DCAP(ECDSA)认证的签名不是 relay-core 自己盖的章。relay-core 只能通过 <span class="mono">/dev/attestation/</span> 产出一份描述自身的本地 <b>report</b>(内含 MRENCLAVE 和写入的 report_data)。给这份 report 背书的是 <b>Quoting Enclave(QE)</b>——一个由 Intel 提供、并被 Intel 度量/签名的架构级 enclave。QE 用它的 <b>attestation key</b> 对 report 做 ECDSA 签名,而这把 attestation key 又由平台的 <b>PCK(Provisioning Certification Key)私钥</b>认证。简化成一句话:<b>quote 最终被 PCK 私钥背书,而 PCK 私钥只由该 CPU 平台/Intel 供给持有,运营方拿不到、也复制不出。</b>它不在 enclave 里、不在宿主上、更不在 new-api 主体里。</p>
+
+  <h3>5.2 一路验到 Intel SGX Root CA(客户端 pin 的可信根)</h3>
+  <p>PCK 私钥对应一张 <b>PCK 证书</b>,这张证书由 Intel 的<b>中间 CA(SGX Platform / Processor CA)</b>签发,中间 CA 又由 <b>Intel SGX Root CA</b> 签发。验证器里<b>硬编码固化</b>了 Intel SGX Root CA 的公钥(信任锚)。验证时逐级验签:quote 的签名要能被 PCK 证书验通,PCK 证书要能被中间 CA 验通,中间 CA 要能被 pinned 的 Root CA 验通——任何一级断裂,整条链失效,验证器立即拒绝。信任因此不落在任何运营方或缓存服务身上,而是落在<b>一枚出厂即烧录、全球公开、客户端自己 pin 的 Intel 根公钥</b>上。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 720 580" width="100%" style="max-width:720px" role="img" aria-label="从 DCAP quote 自底向上验到 Intel SGX Root CA 的签名链,PCCS 以虚线仅提供 collateral">
+      <rect x="0" y="0" width="720" height="580" fill="#fff"/>
+      <g font-family="-apple-system,'Noto Sans SC','Segoe UI',sans-serif" text-anchor="middle">
+
+        <!-- Root CA (top, trust anchor) -->
+        <rect x="40" y="44" width="320" height="82" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+        <text x="200" y="80" font-size="15" font-weight="700" fill="#0f1222">🔒 Intel SGX Root CA</text>
+        <text x="200" y="104" font-size="13" fill="#3a3f5c">可信根 · 出厂烧录 · 客户端/验证器 pin 其公钥</text>
+
+        <!-- Intermediate CA -->
+        <rect x="40" y="162" width="320" height="78" rx="8" fill="#f6f7fb" stroke="#4f46e5" stroke-width="1.8"/>
+        <text x="200" y="194" font-size="14.5" font-weight="700" fill="#0f1222">Intel SGX Platform / Processor CA</text>
+        <text x="200" y="218" font-size="13" fill="#3a3f5c">中间 CA · 由 Root CA 签发</text>
+
+        <!-- PCK Cert -->
+        <rect x="40" y="276" width="320" height="78" rx="8" fill="#f6f7fb" stroke="#4f46e5" stroke-width="1.8"/>
+        <text x="200" y="308" font-size="14.5" font-weight="700" fill="#0f1222">PCK 证书</text>
+        <text x="200" y="332" font-size="13" fill="#3a3f5c">绑定该 CPU 平台 + TCB 等级 · 由中间 CA 签发</text>
+
+        <!-- Quote (bottom, the signed object) -->
+        <rect x="40" y="390" width="320" height="96" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="2"/>
+        <text x="200" y="418" font-size="14.5" font-weight="700" fill="#146c2e">DCAP Quote · ECDSA 签名</text>
+        <text x="200" y="444" font-size="13" fill="#3a3f5c">QE 用 PCK 私钥对 relay-core report 签名</text>
+        <text x="200" y="468" font-size="13" fill="#3a3f5c">载荷含 MRENCLAVE 与 report_data</text>
+
+        <!-- upward chain arrows (verify climbs to root) -->
+        <!-- Quote -> PCK -->
+        <line x1="200" y1="390" x2="200" y2="368" stroke="#6b7188" stroke-width="2"/>
+        <polygon points="200,354 193,368 207,368" fill="#6b7188"/>
+        <text x="214" y="375" font-size="13" fill="#3a3f5c" text-anchor="start">PCK 私钥签名(经 QE)</text>
+        <!-- PCK -> Intermediate -->
+        <line x1="200" y1="276" x2="200" y2="254" stroke="#6b7188" stroke-width="2"/>
+        <polygon points="200,240 193,254 207,254" fill="#6b7188"/>
+        <text x="214" y="261" font-size="13" fill="#3a3f5c" text-anchor="start">中间 CA 签发 PCK 证书</text>
+        <!-- Intermediate -> Root -->
+        <line x1="200" y1="162" x2="200" y2="140" stroke="#6b7188" stroke-width="2"/>
+        <polygon points="200,126 193,140 207,140" fill="#6b7188"/>
+        <text x="214" y="147" font-size="13" fill="#3a3f5c" text-anchor="start">Root CA 签发中间 CA</text>
+
+        <!-- PCCS on the right, dashed = only supplies collateral -->
+        <rect x="430" y="200" width="260" height="150" rx="8" fill="#f6f7fb" stroke="#0ea5a4" stroke-width="2" stroke-dasharray="7 5"/>
+        <text x="560" y="232" font-size="15" font-weight="700" fill="#0ea5a4">PCCS</text>
+        <text x="560" y="256" font-size="12.5" fill="#6b7188">(证书缓存 / 分发服务)</text>
+        <text x="560" y="286" font-size="13" font-weight="700" fill="#3a3f5c">只提供 collateral:</text>
+        <text x="560" y="310" font-size="12.5" fill="#3a3f5c">PCK 证书链 · TCBInfo</text>
+        <text x="560" y="332" font-size="12.5" fill="#3a3f5c">QEIdentity · CRL</text>
+
+        <!-- dashed connector PCCS -> chain (into PCK box) -->
+        <line x1="430" y1="300" x2="374" y2="300" stroke="#0ea5a4" stroke-width="1.8" stroke-dasharray="6 4"/>
+        <polygon points="360,300 374,294 374,306" fill="#0ea5a4"/>
+        <text x="398" y="292" font-size="12" fill="#0ea5a4" text-anchor="middle">喂给验证</text>
+
+        <text x="560" y="374" font-size="12.5" fill="#d97706">⚠ 只中转已被 Intel 签名的材料 · 改一字节即失效</text>
+
+        <!-- legend -->
+        <rect x="40" y="500" width="20" height="14" rx="3" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.5"/>
+        <text x="66" y="512" font-size="12.5" fill="#3a3f5c" text-anchor="start">CA 证书 / 信任锚</text>
+        <rect x="210" y="500" width="20" height="14" rx="3" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.5"/>
+        <text x="236" y="512" font-size="12.5" fill="#3a3f5c" text-anchor="start">被签名对象:DCAP quote</text>
+        <line x1="452" y1="507" x2="480" y2="507" stroke="#0ea5a4" stroke-width="2" stroke-dasharray="6 4"/>
+        <text x="486" y="512" font-size="12.5" fill="#3a3f5c" text-anchor="start">PCCS:仅提供 collateral</text>
+        <text x="40" y="544" font-size="12.5" fill="#6b7188" text-anchor="start">🔒 = 出厂烧录、客户端 pin 的可信根 ｜ 箭头 = 签名一路验到 Intel 根 CA(自底向上)</text>
+      </g>
+    </svg>
+    <figcaption>quote 的 ECDSA 签名经 PCK 证书 → 中间 CA → 一路验到客户端 pin 的 Intel SGX Root CA;PCCS 只以虚线提供 collateral,不参与签名信任。</figcaption>
+  </figure>
+
+  <h3>5.3 PCCS 只提供 collateral,伪造不了签名</h3>
+  <p>逐级验签需要一批"料":PCK 证书链、平台 TCB 等级信息(<b>TCBInfo</b>)、合法 QE 的身份度量(<b>QEIdentity</b>)、以及证书吊销列表(<b>CRL</b>)。这批料合称 <b>collateral</b>,由 <b>PCCS(Provisioning Certification Caching Service)</b> 缓存与分发(本系统用阿里云 PCCS,见 <span class="mono">/etc/sgx_default_qcnl.conf</span>)。关键在于:<b>PCCS 里的每一份 collateral 都已经被 Intel 事先签过名,而 PCCS 本身没有任何 Intel 私钥。</b>它只是个搬运工。所以即便 PCCS 恶意、被入侵、或到 PCCS 的链路被 MITM,它顶多能塞给你一份伪造/篡改的 collateral——而验证器会拿 pinned 的 Intel Root 公钥去验这批料的签名,伪造的东西当场验不过,直接拒绝连接。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 720 330" width="100%" style="max-width:720px" role="img" aria-label="恶意 PCCS 投喂伪造 collateral,验证器用 pinned Intel Root 公钥验签失败,拒绝连接">
+      <rect x="0" y="0" width="720" height="330" fill="#fff"/>
+      <g font-family="-apple-system,'Noto Sans SC','Segoe UI',sans-serif" text-anchor="middle">
+
+        <!-- malicious PCCS -->
+        <rect x="30" y="70" width="210" height="160" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="2"/>
+        <text x="135" y="104" font-size="14.5" font-weight="700" fill="#b91c1c">恶意 / 被入侵 PCCS</text>
+        <text x="135" y="130" font-size="12.5" fill="#3a3f5c">(或链路被 MITM)</text>
+        <text x="135" y="164" font-size="13" fill="#b91c1c">篡改 collateral</text>
+        <text x="135" y="188" font-size="13" fill="#b91c1c">伪造 PCK 证书链</text>
+
+        <!-- arrow 1 -->
+        <line x1="240" y1="150" x2="286" y2="150" stroke="#6b7188" stroke-width="2"/>
+        <polygon points="290,150 279,144 279,156" fill="#6b7188"/>
+        <text x="265" y="138" font-size="12" fill="#6b7188">投喂伪造材料</text>
+
+        <!-- verifier -->
+        <rect x="290" y="55" width="230" height="210" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+        <text x="405" y="84" font-size="15" font-weight="700" fill="#4f46e5">客户端验证器</text>
+        <rect x="308" y="98" width="194" height="50" rx="6" fill="#fff" stroke="#4f46e5" stroke-width="1.5"/>
+        <text x="405" y="120" font-size="12.5" fill="#3a3f5c">🔒 本地固化</text>
+        <text x="405" y="139" font-size="12.5" font-weight="700" fill="#0f1222">Intel SGX Root CA 公钥</text>
+        <text x="405" y="176" font-size="13" fill="#dc2626">✗ PCK 证书链验签失败</text>
+        <text x="405" y="200" font-size="13" fill="#dc2626">✗ quote 签名与根不符</text>
+        <text x="405" y="228" font-size="11.5" fill="#6b7188">无签名可上溯到 pinned Root</text>
+
+        <!-- arrow 2 -->
+        <line x1="520" y1="150" x2="556" y2="150" stroke="#6b7188" stroke-width="2"/>
+        <polygon points="560,150 549,144 549,156" fill="#6b7188"/>
+        <text x="540" y="138" font-size="12" fill="#6b7188">判定</text>
+
+        <!-- reject -->
+        <rect x="560" y="95" width="140" height="120" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="2"/>
+        <text x="630" y="142" font-size="15" font-weight="700" fill="#b91c1c">拒绝连接</text>
+        <text x="630" y="170" font-size="12.5" fill="#3a3f5c">不发送任何</text>
+        <text x="630" y="190" font-size="12.5" fill="#3a3f5c">prompt</text>
+
+        <!-- bottom note -->
+        <text x="360" y="302" font-size="12.5" fill="#6b7188">PCCS 无 Intel 私钥 → 造不出能验到 pinned Root 的有效签名;只能中转已被 Intel 签名的公开 collateral。</text>
+      </g>
+    </svg>
+    <figcaption>恶意 PCCS 只能投喂伪造 collateral;因验证器 pin 的是 Intel Root 公钥,伪造材料验签必然失败,验证器 fail-closed 拒绝。</figcaption>
+  </figure>
+
+  <table class="wp-t">
+    <thead>
+      <tr><th>collateral</th><th>内容</th><th>由谁签名</th><th>恶意 PCCS 篡改后的后果</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>PCK 证书链</td><td>平台供给密钥证书 + 中间 CA</td><td>Intel SGX Root CA 体系</td><td>验签不通过 → 拒绝</td></tr>
+      <tr><td>TCBInfo</td><td>平台 TCB(微码 / SVN)等级与状态</td><td>Intel(TCB Signing Cert)</td><td>签名失效 / TCB 判定异常 → 拒绝</td></tr>
+      <tr><td>QEIdentity</td><td>合法 Quoting Enclave 的度量与版本</td><td>Intel</td><td>QE 身份不符 → 拒绝</td></tr>
+      <tr><td>CRL</td><td>证书吊销列表</td><td>Intel</td><td>伪造不出"未吊销" → 拒绝</td></tr>
+    </tbody>
+  </table>
+
+  <p>为什么恶意 PCCS 终究没用,可以归纳成四点:</p>
+  <ul>
+    <li><b>没有 Intel 私钥</b>——它造不出任何新的、能被 pinned Root 验通的 PCK / 中间 / 根签名。</li>
+    <li><b>collateral 全是公开且可离线核验的</b>——甚至能由 enclave 的 <span class="mono">/attestation/collateral</span> 端点带外一次性喂给验证器,完全绕开 PCCS。</li>
+    <li><b>信任锚不是 PCCS</b>——验证器 pin 的是 Intel Root 公钥,从不假设 PCCS 诚实。</li>
+    <li><b>最坏是 fail-closed</b>——PCCS 宕机 = 拿不到 collateral = 验证失败并拒连,而不是被骗放行。</li>
+  </ul>
+
+  <p>这正好补齐了第 4 节客户端脚本 PARTIAL PASS 里缺的那一环:<b>DCAP 签名链验证</b>。有了它,quote 从一句"声称"变成一份<b>由 Intel 硬件根 CA 背书、任何人都伪造不了</b>的数学声明——而 MRENCLAVE 比对(代码就是那份不落盘的审计构建)与 report_data 通道绑定(防 MITM 转发)则在此基础之上,继续把结论钉死。</p>
+</section>

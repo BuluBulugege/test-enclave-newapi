@@ -1,0 +1,137 @@
+<section class="wp" id="s-08">
+  <h2>8 · 无正文留存 —— 为什么"可度量"</h2>
+
+  <p>市面上绝大多数"无日志（no-log）"承诺，本质是一个<b>运行时开关</b>：一条配置项、一段隐私条款、一份内部流程。你无法核实它，只能<em>相信</em>运营方"没有把日志打开"、"没有偷偷入库"。而本系统的"不存正文"是另一种东西 —— 它是 <b>relay-core</b> 二进制与 Gramine manifest 的<b>结构性事实</b>，并且这份结构被 <b>MRENCLAVE</b>（code + manifest 的度量值）固定下来，因此它是<b>可度量、可验证</b>的：任何人在发出 prompt 之前，都能用 DCAP quote 把 MRENCLAVE 比对一遍。</p>
+
+  <h3>8.1 依赖闭包：能落盘的代码根本不在二进制里</h3>
+
+  <p>对 enclave 入口执行 <code>go list -deps ./cmd/relay-core</code>，其一方（first-party）依赖闭包只有三个<b>纯包</b>—— <code>pkg/officialurls</code>（官方上游 URL 白名单）、<code>pkg/relaycontrol</code>（控制面 DTO 与客户端接口）、<code>pkg/raenclave</code>（RA-TLS / DCAP quote 生成）—— 外加 Go 标准库。这三个包都没有任何磁盘、数据库或日志副作用。new-api 里真正能<b>落盘 / 写库 / 记日志</b>的那些包（<code>model</code> 走 GORM 入库、<code>common</code> 含文件写入、<code>logger</code> 打日志到磁盘）<b>一个都没有被 import</b>。链接器（linker）因此从不会把这些代码拉进二进制。结果很干脆：<b>能持久化正文的代码不在二进制里，运行时无论怎么调用都无法触发它。</b></p>
+
+  <h3>8.2 文件系统：连"写的地方"都没有</h3>
+
+  <p>再退一步做纵深防御（defense in depth）：就算某个 bug 真去调了 <code>os.Create</code>，Gramine manifest 的 <code>fs.mounts</code> 也没有给它任何落点。挂载表里只有 ——（1）一个 <b>encrypted tmpfs</b> 映射到 <code>/tmp</code>，它是 enclave 内的加密 EPC 内存、<b>不由宿主承载</b>、进程退出即焚；（2）<b>只读</b>的 trusted 二进制与 libs，全部度量进 MRENCLAVE；（3）一份 encrypted secrets 文件（密文存宿主，由绑定 MRENCLAVE 的密钥在 enclave 内解密）。<b>没有任何可写宿主挂载，没有 <code>allowed_files</code>，也没有 encrypted-files 的宿主映射。</b>所以最坏情况下，一次误写也只会落进"退出即焚"的加密内存，永远碰不到宿主磁盘。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 720 444" width="100%" style="max-width:720px" role="img"
+         aria-label="左侧依赖闭包：cmd/relay-core 只依赖 officialurls、relaycontrol、raenclave 三个纯包加 Go 标准库，model/common/logger 不在闭包；右侧 Enclave 文件系统：只有加密 tmpfs、只读 trusted 二进制、encrypted secrets，无可写宿主路径"
+         font-family="-apple-system,'Noto Sans SC','Segoe UI',sans-serif">
+
+      <!-- ========== 左：依赖闭包 ========== -->
+      <rect x="14" y="40" width="330" height="300" rx="12" fill="#ffffff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="30" y="62" font-size="14" font-weight="800" fill="#0f1222">① 依赖闭包 (dependency closure)</text>
+      <text x="30" y="80" font-size="10" fill="#6b7188" font-family="ui-monospace,Menlo,monospace">go list -deps ./cmd/relay-core</text>
+
+      <!-- 入口 -->
+      <rect x="90" y="92" width="178" height="34" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="179" y="114" text-anchor="middle" font-size="13" font-weight="700" fill="#4f46e5">cmd/relay-core</text>
+
+      <!-- 入口 -> 纯包 箭头 -->
+      <line x1="179" y1="126" x2="179" y2="142" stroke="#4f46e5" stroke-width="2"/>
+      <polygon points="179,146 174,137 184,137" fill="#4f46e5"/>
+
+      <!-- 纯包 row1 -->
+      <rect x="30" y="148" width="140" height="40" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.6"/>
+      <text x="100" y="165" text-anchor="middle" font-size="12.5" font-weight="700" fill="#146c2e" font-family="ui-monospace,Menlo,monospace">officialurls</text>
+      <text x="100" y="180" text-anchor="middle" font-size="10" fill="#3a3f5c">官方 URL 白名单</text>
+
+      <rect x="182" y="148" width="140" height="40" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.6"/>
+      <text x="252" y="165" text-anchor="middle" font-size="12.5" font-weight="700" fill="#146c2e" font-family="ui-monospace,Menlo,monospace">relaycontrol</text>
+      <text x="252" y="180" text-anchor="middle" font-size="10" fill="#3a3f5c">控制面 DTO / 客户端</text>
+
+      <!-- 纯包 row2 -->
+      <rect x="30" y="196" width="140" height="40" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.6"/>
+      <text x="100" y="213" text-anchor="middle" font-size="12.5" font-weight="700" fill="#146c2e" font-family="ui-monospace,Menlo,monospace">raenclave</text>
+      <text x="100" y="228" text-anchor="middle" font-size="10" fill="#3a3f5c">RA-TLS · quote</text>
+
+      <rect x="182" y="196" width="140" height="40" rx="8" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.6"/>
+      <text x="252" y="213" text-anchor="middle" font-size="12.5" font-weight="700" fill="#0f1222">Go 标准库</text>
+      <text x="252" y="228" text-anchor="middle" font-size="10" fill="#3a3f5c">stdlib (net/http, crypto…)</text>
+
+      <!-- 被排除：model/common/logger -->
+      <rect x="30" y="250" width="284" height="80" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="1.8" stroke-dasharray="6 4"/>
+      <text x="44" y="272" font-size="12.5" font-weight="700" fill="#b91c1c">✗ 不在闭包 · 未链接进二进制</text>
+      <rect x="44" y="281" width="76" height="22" rx="6" fill="#ffffff" stroke="#dc2626" stroke-width="1.4"/>
+      <text x="82" y="296" text-anchor="middle" font-size="11.5" fill="#b91c1c" font-family="ui-monospace,Menlo,monospace">model</text>
+      <rect x="128" y="281" width="80" height="22" rx="6" fill="#ffffff" stroke="#dc2626" stroke-width="1.4"/>
+      <text x="168" y="296" text-anchor="middle" font-size="11.5" fill="#b91c1c" font-family="ui-monospace,Menlo,monospace">common</text>
+      <rect x="216" y="281" width="82" height="22" rx="6" fill="#ffffff" stroke="#dc2626" stroke-width="1.4"/>
+      <text x="257" y="296" text-anchor="middle" font-size="11.5" fill="#b91c1c" font-family="ui-monospace,Menlo,monospace">logger</text>
+      <text x="44" y="322" font-size="10" fill="#b91c1c">落盘 / 写库 / 记日志的代码 → 二进制里根本没有</text>
+
+      <!-- ========== 右：Enclave 文件系统 ========== -->
+      <rect x="376" y="40" width="330" height="300" rx="12" fill="#ffffff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="392" y="62" font-size="14" font-weight="800" fill="#0f1222">② Enclave 文件系统</text>
+      <text x="392" y="80" font-size="10" fill="#6b7188" font-family="ui-monospace,Menlo,monospace">Gramine manifest · fs.mounts</text>
+
+      <!-- 加密 tmpfs -->
+      <rect x="392" y="92" width="298" height="48" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.8"/>
+      <text x="406" y="113" font-size="12.5" font-weight="700" fill="#146c2e">加密 tmpfs → /tmp</text>
+      <text x="406" y="131" font-size="10" fill="#3a3f5c">加密 EPC 内存 · 非宿主承载 · 退出即焚</text>
+
+      <!-- 只读 trusted 二进制 -->
+      <rect x="392" y="148" width="298" height="48" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.8"/>
+      <text x="406" y="169" font-size="12.5" font-weight="700" fill="#4f46e5">只读 trusted 二进制 + libs</text>
+      <text x="406" y="187" font-size="10" fill="#3a3f5c">read-only · 度量进 MRENCLAVE</text>
+
+      <!-- encrypted secrets -->
+      <rect x="392" y="204" width="298" height="44" rx="8" fill="#f0fdfa" stroke="#0ea5a4" stroke-width="1.8"/>
+      <text x="406" y="224" font-size="12.5" font-weight="700" fill="#0f766e">encrypted secrets（密文在宿主）</text>
+      <text x="406" y="240" font-size="10" fill="#3a3f5c">由绑定 MRENCLAVE 的密钥在 enclave 内解密</text>
+
+      <!-- 被排除：可写宿主路径 -->
+      <rect x="392" y="256" width="298" height="66" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="1.8" stroke-dasharray="6 4"/>
+      <text x="406" y="278" font-size="12.5" font-weight="700" fill="#b91c1c">✗ 无可写宿主挂载 · 无 allowed_files</text>
+      <text x="406" y="296" font-size="10" fill="#b91c1c">无 encrypted-files 宿主映射</text>
+      <text x="406" y="313" font-size="10" fill="#b91c1c">→ 即使误调 os.Create，也落不到宿主磁盘</text>
+
+      <!-- ========== 结论 banner ========== -->
+      <rect x="14" y="352" width="692" height="48" rx="10" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.6"/>
+      <path d="M30 374 v-4 a4 4 0 0 1 8 0 v4" stroke="#146c2e" stroke-width="1.8" fill="none"/>
+      <rect x="27" y="374" width="14" height="12" rx="2" fill="#16a34a"/>
+      <circle cx="34" cy="379" r="1.4" fill="#e7f6ec"/>
+      <text x="52" y="372" font-size="13" font-weight="700" fill="#146c2e">结论：不存正文是结构约束（依赖闭包 ∩ 文件系统）</text>
+      <text x="52" y="390" font-size="11.5" fill="#146c2e">被 MRENCLAVE 固定 → 可度量、可验证，而非可被运营方翻转的运行时开关</text>
+
+      <!-- ========== 图例 ========== -->
+      <rect x="20" y="406" width="16" height="11" rx="2" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="42" y="415" font-size="11" fill="#6b7188">绿 = 可信 · 已度量进 MRENCLAVE（纯包 / 加密 EPC / 只读二进制）</text>
+      <rect x="20" y="424" width="16" height="11" rx="2" fill="#fdeaea" stroke="#dc2626" stroke-width="1.5" stroke-dasharray="5 3"/>
+      <text x="42" y="433" font-size="11" fill="#6b7188">红虚线 = 被结构排除（不在二进制 / 不在 manifest，运行时也无法触发）</text>
+    </svg>
+    <figcaption>左：relay-core 的一方依赖闭包只有 3 个纯包 + Go 标准库，model/common/logger 未被链接；右：Gramine manifest 只挂加密 tmpfs 与只读 trusted 二进制，无可写宿主路径。两层都被 MRENCLAVE 度量固定，因此"不存正文"是结构事实。</figcaption>
+  </figure>
+
+  <h3>8.3 承诺 vs 结构：这就是"可度量"的差别</h3>
+
+  <p>把两种做法并排看，差别一目了然。传统 no-log 靠"运营方自律"，用户无从核实、也无从阻止一次单方的开关翻转；结构式 no-log 则把"不存正文"编码进了代码闭包与文件系统布局，任何改动都会改变 MRENCLAVE，从而在远程认证阶段<b>当场失败</b>。</p>
+
+  <table class="wp-t">
+    <thead>
+      <tr><th>维度</th><th>承诺式 no-log（传统）</th><th>结构式 no-log（本系统）</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>不存正文的机制</td>
+        <td>配置开关 / 隐私条款 / 内部流程</td>
+        <td>依赖闭包不含持久化代码 + manifest 无可写宿主路径</td>
+      </tr>
+      <tr>
+        <td>谁来保证</td>
+        <td>运营方自律，须相信其"没打开日志"</td>
+        <td>无需信任：代码结构 + 文件系统被 MRENCLAVE 度量</td>
+      </tr>
+      <tr>
+        <td>能否被单方翻转</td>
+        <td>能：改配置或加一行日志即可，用户无感</td>
+        <td>不能：改 import 或 fs.mount → MRENCLAVE 变 → 认证失败</td>
+      </tr>
+      <tr>
+        <td>用户如何核实</td>
+        <td>无法核实，只能相信</td>
+        <td>发 prompt 前用 DCAP quote 比对 MRENCLAVE = e5c301b5…5bd9b36a</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>换句话说：本系统不请你"相信我们不记录"，而是把"记录正文"这条路径从二进制和文件系统里<b>结构性地拿掉</b>，再用一个你能亲自验证的 MRENCLAVE 把这份构造钉死。这就是"可度量"三个字的全部含义。</p>
+</section>

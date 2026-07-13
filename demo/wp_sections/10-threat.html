@@ -1,0 +1,140 @@
+<section class="wp" id="s-10">
+  <h2>10 · 威胁模型与诚实边界</h2>
+
+  <p>一套安全系统的价值，取决于它<b>诚实地</b>说清"在什么假设下、挡住了谁、又挡不住什么"。本系统的信任边界很干脆：<b>可信计算基（TCB）只有三样东西</b>——SGX 硬件（CPU 对 EPC 内存的透明加解密）、被逐页度量、其指纹等于 pin 值 <code>e5c3…9b36a</code> 的 relay-core enclave，以及客户端那份锚定在 <b>Intel SGX Root CA</b> 公钥上的验证逻辑。<b>其余一切都在边界之外且默认不可信</b>：运营方、宿主 OS、云 hypervisor、网络链路，全都可以任意作恶，却拿不到你的 prompt/response 明文。下面用对手能力矩阵把这条边界钉死，再用"诚实边界"一节讲清它<b>不</b>承诺什么。</p>
+
+  <h3>10.1 对手能力矩阵</h3>
+
+  <p>把每一类现实对手拆成两列——"能做什么"（它确实拥有的能力，我们不否认）与"不能做什么"（SGX + DCAP + RA-TLS 从密码学与硬件上封死的能力）。注意最后一行：<b>官方上游本就是 prompt 明文的合法收件人</b>，这不是漏洞，而是这套架构诚实标注的"必要信任"。</p>
+
+  <table class="wp-t">
+    <thead>
+      <tr><th>对手</th><th>能做什么（承认的能力）</th><th>不能做什么（被 TCB 封死）</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>恶意运营方</b><br>new-api 控制面 / 部署方</td>
+        <td>决定路由与计费（<code>{model, token}</code>）；看到调用元数据（模型、token 计费数、时间）；选择部署哪份镜像；随时停机 / 拒绝服务</td>
+        <td>读取 prompt / response 明文；在不改变 MRENCLAVE 的前提下改动 enclave 代码或 manifest；伪造 quote（手里没有 Intel 私钥）；从 new-api 侧导出 enclave 内 TLS 私钥</td>
+      </tr>
+      <tr>
+        <td><b>宿主 OS / root</b><br>ring0 内核</td>
+        <td>完全控制内核、内存分页与调度；快照 / 丢弃加密 EPC；发起 DoS、冷启动、镜像回滚</td>
+        <td>解密 EPC 明文（CPU 透明加解密，密钥不出芯片）；篡改 enclave 代码而不改 MRENCLAVE；把 enclave 内私钥读出内存</td>
+      </tr>
+      <tr>
+        <td><b>云 hypervisor / VMM</b><br>云厂商 / 虚拟化层</td>
+        <td>控制虚拟化层与内存映射；对加密 EPC 做快照、迁移、暂停</td>
+        <td>与 ring0 同级——SGX 威胁模型早已把 VMM 列为不可信：读不到明文、改不了度量、拿不到私钥</td>
+      </tr>
+      <tr>
+        <td><b>网络中间人</b><br>MITM / 链路</td>
+        <td>拦截 / 延迟 / 丢弃密文；观察连接元数据（IP、时序、包长、频率）；尝试重放与代理转发</td>
+        <td>解密 RA-TLS 会话；借 <code>report_data = SHA-512(SPKI)</code> 的通道绑定冒充 enclave；伪造一份能验到 Intel Root 的 quote</td>
+      </tr>
+      <tr>
+        <td><b>恶意上游</b><br>OpenAI / Anthropic / …</td>
+        <td>看到本就发给它的 prompt（它是明文的<b>合法收件人</b>）；记录、分析、返回任意内容或错误</td>
+        <td>冒充其它家（enclave 写死官方 URL + 校验官方 TLS）；拿到发往<b>别家</b>上游的 prompt；触及 enclave 代码或客户端的信任决策</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <figure class="fig">
+    <svg viewBox="0 0 760 500" width="100%" style="max-width:720px" role="img"
+         aria-label="信任边界总结图：不可信区的运营方/宿主OS/hypervisor/网络中间人被挡在 TCB 之外，明文 prompt 只在客户端-enclave-官方上游之间流动，元数据仍会泄漏"
+         font-family="-apple-system,'Noto Sans SC','Segoe UI',sans-serif">
+      <rect x="0" y="0" width="760" height="500" fill="#ffffff"/>
+      <text x="380" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#0f1222">信任边界总结：谁在 TCB 内 · 谁被挡在外 · 什么仍会泄漏</text>
+
+      <!-- ===== 不可信区（顶部红虚线带 + 四个对手 chip） ===== -->
+      <rect x="20" y="42" width="720" height="104" rx="12" fill="#fdeaea" fill-opacity="0.55" stroke="#dc2626" stroke-width="1.8" stroke-dasharray="6 4"/>
+      <text x="34" y="62" text-anchor="start" font-size="12.5" font-weight="700" fill="#b91c1c">不可信区 · 可完全控制系统（ring0 / VMM / 网络 / 部署），却读不到明文正文</text>
+
+      <rect x="32"  y="76" width="166" height="56" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="115" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">恶意运营方</text>
+      <text x="115" y="119" text-anchor="middle" font-size="10.5" fill="#6b7188">new-api 控制面 / 部署方</text>
+
+      <rect x="210" y="76" width="166" height="56" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="293" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">宿主 OS · root</text>
+      <text x="293" y="119" text-anchor="middle" font-size="10.5" fill="#6b7188">ring0 / 分页 / 调度</text>
+
+      <rect x="388" y="76" width="166" height="56" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="471" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">云 hypervisor</text>
+      <text x="471" y="119" text-anchor="middle" font-size="10.5" fill="#6b7188">VMM / 虚拟化层</text>
+
+      <rect x="566" y="76" width="166" height="56" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="649" y="100" text-anchor="middle" font-size="13" font-weight="700" fill="#b91c1c">网络中间人</text>
+      <text x="649" y="119" text-anchor="middle" font-size="10.5" fill="#6b7188">MITM / 链路</text>
+
+      <!-- ===== 攻击撞边界（红色下箭头被 TCB 挡回） ===== -->
+      <line x1="380" y1="148" x2="380" y2="196" stroke="#dc2626" stroke-width="2.5"/>
+      <polygon points="380,204 374,193 386,193" fill="#dc2626"/>
+      <text x="398" y="176" text-anchor="start" font-size="11.5" font-weight="700" fill="#b91c1c">✗ 攻击撞上 TCB 边界</text>
+      <text x="398" y="193" text-anchor="start" font-size="10.5" fill="#b91c1c">拿不到明文 · 改码即改 MRENCLAVE · 伪造不了 quote</text>
+
+      <!-- ===== 元数据泄漏（warn 虚线上行，穿出边界） ===== -->
+      <line x1="250" y1="212" x2="202" y2="150" stroke="#d97706" stroke-width="2" stroke-dasharray="6 4"/>
+      <polygon points="198,146 209,150 202,157" fill="#d97706"/>
+      <text x="132" y="178" text-anchor="middle" font-size="10.5" font-weight="700" fill="#b45309">元数据照常泄漏</text>
+      <text x="132" y="194" text-anchor="middle" font-size="10" fill="#b45309">model · token 数 · 时序 · 长度</text>
+
+      <!-- ===== TCB（中央绿色实线框） ===== -->
+      <rect x="205" y="214" width="350" height="150" rx="12" fill="#e7f6ec" stroke="#16a34a" stroke-width="2.5"/>
+      <text x="380" y="236" text-anchor="middle" font-size="14" font-weight="800" fill="#15803d">🔒 可信计算基（TCB）</text>
+      <text x="224" y="260" text-anchor="start" font-size="12" fill="#0f1222">relay-core enclave · MRENCLAVE</text>
+      <text x="224" y="277" text-anchor="start" font-size="10.5" font-family="ui-monospace,Menlo,Consolas,monospace" fill="#6b7188">e5c301b5…5bd9b36a（逐字节比对）</text>
+      <text x="224" y="300" text-anchor="start" font-size="12" fill="#0f1222">CPU / EPC 硬件加密内存（明文仅此解密）</text>
+      <text x="224" y="320" text-anchor="start" font-size="12" fill="#0f1222">enclave 内 RA-TLS 私钥（永不出 enclave）</text>
+      <text x="224" y="344" text-anchor="start" font-size="10.5" fill="#d97706">⚠ 微架构侧信道 = 残余风险（见诚实边界）</text>
+
+      <!-- ===== 客户端（左 · 信任锚） ===== -->
+      <rect x="20" y="238" width="150" height="104" rx="10" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="95" y="264" text-anchor="middle" font-size="13" font-weight="700" fill="#4f46e5">客户端验证器</text>
+      <text x="95" y="286" text-anchor="middle" font-size="10.5" fill="#3a3f5c">pin MRENCLAVE</text>
+      <text x="95" y="302" text-anchor="middle" font-size="9.5" font-family="ui-monospace,Menlo,Consolas,monospace" fill="#6b7188">e5c3…9b36a</text>
+      <text x="95" y="324" text-anchor="middle" font-size="10.5" fill="#3a3f5c">pin Intel Root 公钥</text>
+
+      <!-- ===== 官方上游（右 · 必要信任） ===== -->
+      <rect x="590" y="238" width="150" height="104" rx="10" fill="#e2f5f4" stroke="#0ea5a4" stroke-width="2"/>
+      <text x="665" y="264" text-anchor="middle" font-size="13" font-weight="700" fill="#0ea5a4">官方上游</text>
+      <text x="665" y="286" text-anchor="middle" font-size="10.5" fill="#3a3f5c">OpenAI · OpenRouter</text>
+      <text x="665" y="303" text-anchor="middle" font-size="10.5" fill="#3a3f5c">Anthropic · Gemini</text>
+      <text x="665" y="325" text-anchor="middle" font-size="10" fill="#6b7188">明文接收方（必要信任）</text>
+
+      <!-- ===== 明文 prompt 路径（teal 实线，客户端→enclave→上游） ===== -->
+      <line x1="172" y1="290" x2="201" y2="290" stroke="#0ea5a4" stroke-width="2"/>
+      <polygon points="205,290 197,285 197,295" fill="#0ea5a4"/>
+      <text x="188" y="282" text-anchor="middle" font-size="12" font-weight="700" fill="#0f766e">①</text>
+
+      <line x1="557" y1="290" x2="586" y2="290" stroke="#0ea5a4" stroke-width="2"/>
+      <polygon points="590,290 582,285 582,295" fill="#0ea5a4"/>
+      <text x="573" y="282" text-anchor="middle" font-size="12" font-weight="700" fill="#0f766e">②</text>
+
+      <!-- ===== 图例 ===== -->
+      <line x1="40" y1="452" x2="68" y2="452" stroke="#0ea5a4" stroke-width="3"/>
+      <text x="74" y="456" text-anchor="start" font-size="11" fill="#6b7188">明文可信通道</text>
+      <line x1="200" y1="452" x2="228" y2="452" stroke="#dc2626" stroke-width="3"/>
+      <text x="234" y="456" text-anchor="start" font-size="11" fill="#6b7188">作恶能力被 TCB 挡回</text>
+      <line x1="400" y1="452" x2="428" y2="452" stroke="#d97706" stroke-width="2.5" stroke-dasharray="6 4"/>
+      <text x="434" y="456" text-anchor="start" font-size="11" fill="#6b7188">仍会泄漏的元数据</text>
+      <text x="40" y="480" text-anchor="start" font-size="11" fill="#6b7188">① 客户端 → enclave：RA-TLS ｜ ② enclave → 官方上游：官方 TLS ｜ prompt 明文仅存在于这两段</text>
+    </svg>
+    <figcaption>信任边界总结：不可信区（运营方 / 宿主 OS / hypervisor / MITM）撞上 TCB 边界即被挡回，明文 prompt 只在"客户端 ↔ enclave ↔ 官方上游"流动，但 model / token / 时序 / 长度等元数据仍会泄漏。</figcaption>
+  </figure>
+
+  <h3>10.2 诚实边界：这套系统不承诺什么</h3>
+
+  <p>上面的矩阵是"好消息"的一面。真正的安全承诺必须同样清楚地写下"坏消息"——那些前提条件与残余风险。任何回避下列几条的宣传，都应被视为不诚实：</p>
+
+  <ul>
+    <li><b>SGX 微架构侧信道是已知弱点。</b>Foreshadow（L1TF）、ÆPIC Leak、MDS/Plundervolt 一类的微架构侧信道，历史上确实能从 enclave 泄出秘密。缓解手段是<b>及时更新 TCB</b>（微码 + 平台固件），并在 DCAP 阶段用 <b>TCBInfo / SGX SVN 下限</b>拒绝过期平台。我们据实相告：可以把风险压到很低，但<b>不能声称对侧信道 100% 免疫</b>。</li>
+    <li><b>客户端必须"真的验证"才有保证。</b>这套体系的安全性完全落在客户端那几步验证上：验 DCAP 签名链、比对 MRENCLAVE、核对 <code>report_data</code> 通道绑定。<b>跳过验证 = 退化成一条普通 HTTPS</b>，运营方是否作恶你无从知晓；第 4 节脚本那种 <code>PARTIAL PASS</code> 也<b>不等于</b>安全，只是"结构对得上、但签名链未验"。</li>
+    <li><b>debug enclave 与生产 enclave 的 MRENCLAVE 不同。</b>以 debug 模式（<code>sgx.debug = true</code>）加载的 enclave，其内存可被调试器直接读取，机密性形同虚设；而它的度量与生产 enclave <b>完全不同</b>。因此生产部署<b>必须</b> <code>sgx.debug = false</code>，且客户端 pin 的必须是<b>生产 MRENCLAVE</b> <code>e5c3…9b36a</code>——一旦有人拿 debug 镜像顶替，度量比对当场变红。</li>
+    <li><b>纯结构 / 度量检查之外，还必须做 DCAP 签名链验证。</b>只按偏移切出字节、比对 MRENCLAVE 与 <code>report_data</code>，无法阻止一个控制宿主机的攻击者<b>伪造</b>一份"字段都对得上"的假 quote。唯一能证伪它的，是把 quote 的 ECDSA 签名经 PCK 证书链一路验到<b>客户端 pin 的 Intel SGX Root CA</b>（见第 5 节）——缺了这一步，前面的比对都是空中楼阁。</li>
+    <li><b>可复现构建是"源码 ↔ 指纹"的前提。</b>你之所以敢 pin <code>e5c3…9b36a</code>，是因为固定 <b>Go 1.26.1 + Gramine 1.9</b> 的构建可被任何人<b>独立复现</b>，从公开源码重算出同一个 MRENCLAVE。若构建不可复现，这个指纹就无法被独立核对，你就只能盲信运营方"这份指纹对应那份源码"——那等于没有 attestation。</li>
+    <li><b>元数据（token 数 / 模型 / 时序 / 长度）仍会泄漏。</b>内容保密<b>不等于</b>流量分析保密。运营方与网络中间人看不到 prompt 正文，但依旧能观察到你调用了哪个模型、计费多少 token、在什么时间、请求与响应的字节长度与节奏。想进一步降低这类侧信息，需要 padding、批处理、固定节奏等额外手段——本系统<b>不</b>默认提供，也据实说明。</li>
+  </ul>
+
+  <p>把两节合起来看：本系统的承诺是<b>有条件的、且条件全部可核验</b>——当且仅当客户端真的验证了完整签名链、生产 enclave 关闭了 debug、构建可复现、平台 TCB 保持更新时，"运营方 / 宿主 / 云 / 网络看不到你的 prompt"这句话才成立；即便如此，元数据仍会泄漏，侧信道仍是需要持续对抗的残余风险。把这些边界摊开讲清楚，本身就是这套安全姿态的一部分。</p>
+</section>

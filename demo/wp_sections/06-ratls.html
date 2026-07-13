@@ -1,0 +1,161 @@
+<section class="wp" id="s-06">
+  <h2>6 · RA-TLS 通道绑定(防转发 / 中间人)</h2>
+
+  <p>第 5 节的 <b>MRENCLAVE 比对</b>只回答了半个问题:它证明"世界上某处存在一台跑着那份审计过、不落盘代码的真 enclave"。但它<b>没有</b>证明"此刻正在和你通话、终结你 TLS 连接的这个端点,就是那台 enclave"。缺了这一环,一个恶意运营方完全可以从<b>别处</b>一台诚实 enclave 抓一份合法 quote 回放给你,同时用一台<b>普通的、能偷看明文的代理</b>来终结你的 HTTPS——MRENCLAVE 照样能对上,你却把 prompt 明文交给了代理。</p>
+
+  <p>RA-TLS <b>通道绑定(channel binding)</b>就是用来堵死这条转发路径的:让被硬件签名认证的那台 enclave,与正在承载这条 TLS 连接的端点,在密码学上<b>锁死为同一个</b>。做法只有一句话——把 enclave <b>TLS 公钥</b>的指纹写进 quote,客户端再用自己实际连上的证书去核对。</p>
+
+  <h3>6.1 绑定是怎么建立与核验的</h3>
+
+  <p>enclave 在接受任何请求之前,先在 SGX 加密内存(EPC)里现场生成一对 TLS 密钥(EC),私钥永不导出、永不落盘;对证书里的 <b>SubjectPublicKeyInfo(SPKI,公钥结构)</b>做 <b>SHA-512</b> 得到恰好 64 字节的指纹,写入 <span>/dev/attestation/user_report_data</span>,CPU 随即把它作为 quote 的 <b>report_data</b> 字段一并硬件签名。客户端从<b>实际的 TLS 连接</b>取回服务器出示的证书,同样计算 SHA-512(SPKI),再与从 quote 切出的 report_data(offset 368,长度 64B)逐字节比对——相等即证明:终结这条 TLS 的私钥就活在那台被认证的 enclave 内部,没有中间人。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 760 470" width="100%" style="max-width:720px" role="img" aria-label="RA-TLS 通道绑定:enclave 侧生成密钥并写入 report_data,客户端侧握手取证书并比对">
+      <defs>
+        <marker id="a1-teal" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="#0ea5a4"/></marker>
+        <marker id="a1-warn" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="#d97706"/></marker>
+        <marker id="a1-ink" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="#6b7188"/></marker>
+      </defs>
+      <rect x="0" y="0" width="760" height="470" fill="#fff"/>
+
+      <!-- legend -->
+      <line x1="30" y1="22" x2="56" y2="22" stroke="#0ea5a4" stroke-width="2.5"/>
+      <text x="62" y="26" font-size="11.5" fill="#6b7188">TLS 加密通道</text>
+      <line x1="200" y1="22" x2="226" y2="22" stroke="#d97706" stroke-width="2.5" stroke-dasharray="5 4"/>
+      <text x="232" y="26" font-size="11.5" fill="#6b7188">经不可信控制面(quote 已被硬件签名)</text>
+
+      <!-- LEFT panel: Enclave -->
+      <rect x="20" y="44" width="300" height="262" rx="12" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="170" y="64" text-anchor="middle" font-size="14" font-weight="700" fill="#4f46e5">Enclave 侧 · SGX 加密内存(EPC)</text>
+
+      <rect x="34" y="82" width="272" height="42" rx="8" fill="#fff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="46" y="102" font-size="13" fill="#0f1222">① 内存生成 TLS 密钥对 (EC)</text>
+      <text x="46" y="118" font-size="11.5" fill="#6b7188">私钥永不导出 · 永不落盘</text>
+
+      <rect x="34" y="140" width="272" height="42" rx="8" fill="#fff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="46" y="166" font-size="13" fill="#0f1222">② SHA-512(SPKI) → 64 字节指纹</text>
+
+      <rect x="34" y="198" width="272" height="42" rx="8" fill="#fff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="46" y="218" font-size="13" fill="#0f1222">③ 写入 report_data</text>
+      <text x="46" y="234" font-size="10.5" fill="#6b7188" font-family="monospace">→ /dev/attestation/user_report_data</text>
+
+      <rect x="34" y="256" width="272" height="42" rx="8" fill="#fff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="46" y="276" font-size="13" fill="#0f1222">④ CPU 硬件签名,封入 quote</text>
+      <text x="46" y="292" font-size="10.5" fill="#6b7188" font-family="monospace">report_data @ quote offset 368</text>
+
+      <line x1="170" y1="124" x2="170" y2="138" stroke="#6b7188" stroke-width="1.5" marker-end="url(#a1-ink)"/>
+      <line x1="170" y1="182" x2="170" y2="196" stroke="#6b7188" stroke-width="1.5" marker-end="url(#a1-ink)"/>
+      <line x1="170" y1="240" x2="170" y2="254" stroke="#6b7188" stroke-width="1.5" marker-end="url(#a1-ink)"/>
+
+      <!-- RIGHT panel: Client -->
+      <rect x="440" y="44" width="300" height="262" rx="12" fill="#e7f6ec" stroke="#16a34a" stroke-width="2"/>
+      <text x="590" y="64" text-anchor="middle" font-size="14" font-weight="700" fill="#16a34a">客户端侧 · 你的机器(独立核验)</text>
+
+      <rect x="454" y="82" width="272" height="42" rx="8" fill="#fff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="466" y="102" font-size="13" fill="#0f1222">① TLS 握手,取服务器实际证书</text>
+      <text x="466" y="118" font-size="10.5" fill="#6b7188" font-family="monospace">getpeercert(binary_form=True)</text>
+
+      <rect x="454" y="140" width="272" height="42" rx="8" fill="#fff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="466" y="166" font-size="13" fill="#0f1222">② SHA-512(服务器 SPKI) → X</text>
+
+      <rect x="454" y="198" width="272" height="42" rx="8" fill="#fff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="466" y="218" font-size="12.5" fill="#0f1222">③ 从 quote 切出 report_data → Y</text>
+      <text x="466" y="234" font-size="10.5" fill="#6b7188" font-family="monospace">@ offset 368,长度 64B</text>
+
+      <rect x="454" y="256" width="272" height="42" rx="8" fill="#f6f7fb" stroke="#4f46e5" stroke-width="1.8"/>
+      <text x="590" y="283" text-anchor="middle" font-size="14" font-weight="700" fill="#4f46e5">④ 判定  X ≟ Y ?</text>
+
+      <line x1="590" y1="124" x2="590" y2="138" stroke="#6b7188" stroke-width="1.5" marker-end="url(#a1-ink)"/>
+      <line x1="590" y1="182" x2="590" y2="196" stroke="#6b7188" stroke-width="1.5" marker-end="url(#a1-ink)"/>
+      <line x1="590" y1="240" x2="590" y2="254" stroke="#6b7188" stroke-width="1.5" marker-end="url(#a1-ink)"/>
+
+      <!-- cross arrow: TLS cert -->
+      <text x="380" y="84" text-anchor="middle" font-size="11" fill="#0ea5a4">① 实时 TLS 连接</text>
+      <text x="380" y="97" text-anchor="middle" font-size="11" fill="#0ea5a4">服务器出示证书</text>
+      <line x1="320" y1="103" x2="440" y2="103" stroke="#0ea5a4" stroke-width="2" marker-end="url(#a1-teal)"/>
+
+      <!-- cross arrow: quote forwarded -->
+      <text x="381" y="196" text-anchor="middle" font-size="11" fill="#d97706">② 转发 quote</text>
+      <text x="381" y="210" text-anchor="middle" font-size="11" fill="#d97706">(经不可信控制面)</text>
+      <line x1="320" y1="280" x2="440" y2="222" stroke="#d97706" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#a1-warn)"/>
+
+      <!-- verdict -->
+      <line x1="590" y1="298" x2="590" y2="342" stroke="#6b7188" stroke-width="1.5" marker-end="url(#a1-ink)"/>
+      <rect x="110" y="344" width="540" height="46" rx="10" fill="#e7f6ec" stroke="#16a34a" stroke-width="2"/>
+      <text x="380" y="372" text-anchor="middle" font-size="13.5" fill="#146c2e">✓ 相等 ⇒ 绑定成立:被认证的 enclave 就是此刻正与你通话的端点</text>
+      <rect x="110" y="400" width="540" height="46" rx="10" fill="#fdeaea" stroke="#dc2626" stroke-width="2"/>
+      <text x="380" y="428" text-anchor="middle" font-size="13.5" fill="#b1152b">✗ 不等 ⇒ 有人转发别处 enclave 的合法 quote(relay/MITM)⇒ 立即中止</text>
+    </svg>
+    <figcaption>enclave 把自己 TLS 公钥的 SHA-512(SPKI) 塞进硬件签名的 report_data;客户端用实际连接拿到的证书重算并比对,相等即锁死"被认证的 enclave = 正在通话的端点"。</figcaption>
+  </figure>
+
+  <h3>6.2 为什么运营方无法把别处的合法 quote 转发过来冒充</h3>
+
+  <p>关键在于:私钥<b>无法离开 enclave</b>。一份合法 quote 里的 report_data,绑定的是<b>某一把</b>特定公钥;要通过客户端的比对,冒充者必须让自己终结的 TLS 出示<b>同一把</b>公钥的证书,也就是必须掌握对应私钥。而 RA-TLS 的私钥只存在于生成它的那台 enclave 的加密内存里,任何代理、宿主 root、云平台都拿不到。于是转发攻击必然在指纹比对处露馅:</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 760 320" width="100%" style="max-width:720px" role="img" aria-label="转发攻击场景:代理回放别处 enclave 的合法 quote,但用自己的 key_B 终结 TLS,导致客户端指纹不等而中止">
+      <defs>
+        <marker id="a2-bad" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="#dc2626"/></marker>
+        <marker id="a2-ink" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="7" refX="7" refY="3" orient="auto"><path d="M0 0 L7 3 L0 6 z" fill="#6b7188"/></marker>
+      </defs>
+      <rect x="0" y="0" width="760" height="320" fill="#fff"/>
+      <text x="24" y="28" font-size="13" font-weight="700" fill="#0f1222">转发 / 回放攻击(relay)为何被通道绑定挡下</text>
+
+      <!-- honest enclave elsewhere -->
+      <rect x="24" y="112" width="190" height="120" rx="10" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="119" y="138" text-anchor="middle" font-size="13" font-weight="700" fill="#4f46e5">别处的诚实 enclave</text>
+      <text x="119" y="162" text-anchor="middle" font-size="12" fill="#0f1222">TLS key_A(合法)</text>
+      <text x="119" y="186" text-anchor="middle" font-size="11.5" fill="#6b7188">quote.report_data</text>
+      <text x="119" y="203" text-anchor="middle" font-size="11.5" font-family="monospace" fill="#4f46e5">= SHA-512(SPKI_A)</text>
+
+      <!-- malicious proxy -->
+      <rect x="286" y="82" width="188" height="205" rx="10" fill="#fdeaea" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="380" y="106" text-anchor="middle" font-size="13" font-weight="700" fill="#dc2626">恶意运营方 / 代理</text>
+      <text x="380" y="123" text-anchor="middle" font-size="11" fill="#dc2626">(持 key_B,可看明文)</text>
+      <text x="300" y="152" font-size="11.5" fill="#0f1222">① 从别处取回合法 quote</text>
+      <text x="300" y="178" font-size="11.5" fill="#0f1222">② 用 key_B 终结你的 TLS</text>
+      <text x="300" y="195" font-size="11" fill="#dc2626">   → 代理能读到明文</text>
+      <text x="300" y="221" font-size="11.5" fill="#0f1222">③ 把合法 quote 原样回放</text>
+      <text x="300" y="252" font-size="11" fill="#6b7188">✗ 拿不到 key_A 的私钥</text>
+
+      <!-- client -->
+      <rect x="546" y="98" width="192" height="176" rx="10" fill="#e7f6ec" stroke="#16a34a" stroke-width="2"/>
+      <text x="642" y="122" text-anchor="middle" font-size="13" font-weight="700" fill="#16a34a">客户端核验</text>
+      <text x="560" y="150" font-size="11.5" fill="#0f1222">X = SHA-512(SPKI_B)</text>
+      <text x="560" y="166" font-size="10.5" fill="#6b7188">  ← 实际 TLS 证书</text>
+      <text x="560" y="190" font-size="11.5" fill="#0f1222">Y = quote.report_data</text>
+      <text x="560" y="206" font-size="10.5" font-family="monospace" fill="#6b7188">  = SHA-512(SPKI_A)</text>
+      <line x1="560" y1="220" x2="724" y2="220" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="642" y="244" text-anchor="middle" font-size="16" font-weight="700" fill="#dc2626">X ≠ Y</text>
+      <text x="642" y="264" text-anchor="middle" font-size="12" fill="#dc2626">✗ 中止 (relay/MITM)</text>
+
+      <!-- arrows -->
+      <text x="250" y="158" text-anchor="middle" font-size="10.5" fill="#6b7188">转发 quote</text>
+      <line x1="214" y1="172" x2="286" y2="172" stroke="#6b7188" stroke-width="2" marker-end="url(#a2-ink)"/>
+
+      <text x="510" y="148" text-anchor="middle" font-size="10" fill="#dc2626">② key_B 证书</text>
+      <line x1="474" y1="160" x2="546" y2="160" stroke="#dc2626" stroke-width="2" marker-end="url(#a2-bad)"/>
+
+      <text x="510" y="218" text-anchor="middle" font-size="10" fill="#6b7188">③ 回放 quote</text>
+      <line x1="474" y1="230" x2="546" y2="230" stroke="#6b7188" stroke-width="2" marker-end="url(#a2-ink)"/>
+    </svg>
+    <figcaption>代理能回放别处 enclave 的合法 quote(report_data=H(SPKI_A)),却只能用自己的 key_B 终结 TLS;客户端算出的 X=H(SPKI_B) 与 Y=H(SPKI_A) 不等,攻击当场暴露。</figcaption>
+  </figure>
+
+  <p>换言之,通道绑定把"quote 里那把公钥"和"你 TLS 实际用的那把公钥"钉在一起。冒充者要么拿不到私钥(转发别人的 quote,证书对不上),要么就得改代码在同一 enclave 内自己签——而那会改变 MRENCLAVE,在第 5 节的度量比对处红掉。两道检查<b>互相咬合</b>,构成"被认证的代码 = 正在通话的端点"这一完整结论。</p>
+
+  <table class="wp-t">
+    <thead>
+      <tr><th>要素</th><th>值 / 计算</th><th>由谁固定</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>report_data</td><td>SHA-512(TLS SubjectPublicKeyInfo),恰好 64 字节</td><td>enclave 写入 <span>user_report_data</span>,CPU 签入 quote(offset 368)</td></tr>
+      <tr><td>服务器证书</td><td>RA-TLS 自签,SPKI = 该 TLS 公钥</td><td>enclave 内存现场生成,私钥不导出、不落盘</td></tr>
+      <tr><td>客户端判据</td><td>SHA-512(实际连接证书的 SPKI) ≟ quote.report_data</td><td>客户端本地计算并比对(无需信任运营方)</td></tr>
+      <tr><td>MRENCLAVE</td><td>e5c301b5…9b36a(offset 112,32B)</td><td>见 §5:证明运行代码 = 可复现、审计过的构建</td></tr>
+    </tbody>
+  </table>
+
+  <p>正因为 TLS 在 enclave 内部终止,你的 prompt 明文<b>第一次出现</b>就在 SGX 加密内存里;宿主机、运维、云平台即便在网卡抓包也只看到密文。作为不可信控制面的 new-api 只经手 <span>{model, token}</span> 这类元数据,永远碰不到正文——这正是"可验证 NO-LOG"链条中,由 RA-TLS 通道绑定负责钉牢的那一环。DCAP 对 quote 本身 Intel 签名链的验真(防止<b>整体伪造</b>一份 quote)见第 7 节;本节的通道绑定只解决"这份 quote 是不是属于正与我通话的端点"这一层。</p>
+</section>

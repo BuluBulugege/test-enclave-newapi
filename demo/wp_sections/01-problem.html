@@ -1,0 +1,223 @@
+<section class="wp" id="s-01">
+  <h2>1 · 问题与信任模型</h2>
+
+  <p>当你把一段 prompt 发给任意一个普通 AI 网关时，请求虽然走 HTTPS 加密传输，但网关进程会在服务端<strong>终止 TLS</strong>、拿到明文，然后才转发给上游模型。也就是说，在那一刻，运营方的代码<strong>能看见你发的每一个字</strong>，也<strong>能把它写进磁盘、数据库或日志</strong>。你之所以敢发，靠的只是一句「我们不记录」——一句<strong>无法验证</strong>的口头承诺。</p>
+
+  <p>本方案要解决的，正是这个「信任」问题：不是让你换一个「更值得相信」的运营方，而是把「相信」这件事从<strong>人的品德</strong>迁移到<strong>可用密码学独立验证的数学事实</strong>上。核心手段是把负责转发的 relay-core 放进 Intel SGX <em>enclave</em>（Gramine-SGX 1.9 + DCAP 远程认证）里运行，让「服务器看不到、也存不下你的正文」成为一条<strong>任何人都能亲自核验</strong>的结论。</p>
+
+  <h3>1.1 普通 AI 网关 vs 本方案：谁能看到你的 prompt</h3>
+
+  <p>下图对比两种架构下 prompt 的可见范围。关键差别在中间那一跳：传统网关自身就是明文处理点；本方案里承担转发的是 enclave，而作为控制面的 new-api 被明确划为<strong>不可信</strong>，跨越它的边界只有 <code>{model, token}</code> 这类路由元数据，<strong>永远不含 prompt 正文</strong>。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 820 430" width="100%" style="max-width:720px" role="img" font-family="-apple-system,BlinkMacSystemFont,'Noto Sans SC',sans-serif">
+      <rect x="0" y="0" width="820" height="430" fill="#ffffff"/>
+      <line x1="405" y1="44" x2="405" y2="392" stroke="#cbd0e0" stroke-width="1.5" stroke-dasharray="4 4"/>
+
+      <!-- ================= LEFT: traditional gateway ================= -->
+      <text x="200" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#dc2626">① 传统 AI 网关 · 相信人</text>
+
+      <!-- You -->
+      <rect x="125" y="48" width="150" height="40" rx="8" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="200" y="66" text-anchor="middle" font-size="14" fill="#0f1222">你 / 客户端</text>
+      <text x="200" y="81" text-anchor="middle" font-size="11" fill="#6b7188">prompt（含敏感数据）</text>
+      <!-- arrow down -->
+      <line x1="200" y1="88" x2="200" y2="120" stroke="#6b7188" stroke-width="2"/>
+      <polygon points="195,114 205,114 200,122" fill="#6b7188"/>
+      <text x="208" y="108" text-anchor="start" font-size="11" fill="#6b7188">① 发 prompt</text>
+
+      <!-- Gateway (sees plaintext) -->
+      <rect x="95" y="122" width="210" height="98" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="2"/>
+      <text x="200" y="142" text-anchor="middle" font-size="13" font-weight="700" fill="#0f1222">AI 网关进程 · 终止 TLS 见明文</text>
+      <!-- eye icon -->
+      <ellipse cx="140" cy="172" rx="13" ry="8" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <circle cx="140" cy="172" r="4" fill="#dc2626"/>
+      <text x="140" y="200" text-anchor="middle" font-size="10.5" fill="#dc2626">能看</text>
+      <!-- DB cylinder icon -->
+      <ellipse cx="200" cy="164" rx="9" ry="4" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <path d="M191 164 v14 a9 4 0 0 0 18 0 v-14" fill="none" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="200" y="200" text-anchor="middle" font-size="10.5" fill="#dc2626">能存</text>
+      <!-- log/doc icon -->
+      <rect x="256" y="160" width="18" height="20" rx="2" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <line x1="259" y1="166" x2="271" y2="166" stroke="#dc2626" stroke-width="1.2"/>
+      <line x1="259" y1="170" x2="271" y2="170" stroke="#dc2626" stroke-width="1.2"/>
+      <line x1="259" y1="174" x2="268" y2="174" stroke="#dc2626" stroke-width="1.2"/>
+      <text x="265" y="200" text-anchor="middle" font-size="10.5" fill="#dc2626">记日志</text>
+      <text x="200" y="215" text-anchor="middle" font-size="10.5" fill="#dc2626">你的每个字都可能被留存</text>
+
+      <!-- arrow to upstream -->
+      <line x1="200" y1="220" x2="200" y2="250" stroke="#6b7188" stroke-width="2"/>
+      <polygon points="195,244 205,244 200,252" fill="#6b7188"/>
+      <text x="208" y="240" text-anchor="start" font-size="11" fill="#6b7188">② 转发</text>
+
+      <!-- upstream -->
+      <rect x="125" y="252" width="150" height="40" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.5"/>
+      <text x="200" y="277" text-anchor="middle" font-size="13" fill="#0f1222">上游 AI 提供商</text>
+
+      <!-- red callout -->
+      <rect x="45" y="312" width="310" height="72" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="200" y="335" text-anchor="middle" font-size="12.5" font-weight="700" fill="#dc2626">「无日志」= 运营方口头承诺</text>
+      <text x="200" y="356" text-anchor="middle" font-size="12" fill="#0f1222">代码不可见、可被随时修改，</text>
+      <text x="200" y="373" text-anchor="middle" font-size="12" fill="#0f1222">是否落盘只有他们自己知道。</text>
+
+      <!-- ================= RIGHT: this scheme ================= -->
+      <text x="605" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#16a34a">② 本方案 · 相信数学</text>
+
+      <!-- You -->
+      <rect x="445" y="48" width="150" height="40" rx="8" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="520" y="66" text-anchor="middle" font-size="14" fill="#0f1222">你 / 客户端</text>
+      <text x="520" y="81" text-anchor="middle" font-size="11" fill="#6b7188">先验证，再发送</text>
+      <!-- arrow down -->
+      <line x1="520" y1="88" x2="520" y2="120" stroke="#0ea5a4" stroke-width="2"/>
+      <polygon points="515,114 525,114 520,122" fill="#0ea5a4"/>
+      <text x="528" y="108" text-anchor="start" font-size="11" fill="#0ea5a4">RA-TLS 加密通道</text>
+
+      <!-- Enclave -->
+      <rect x="430" y="122" width="180" height="98" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="2"/>
+      <text x="520" y="142" text-anchor="middle" font-size="13" font-weight="700" fill="#0f1222">SGX Enclave · relay-core</text>
+      <!-- padlock icon -->
+      <path d="M452 168 v-4 a5 5 0 0 1 10 0 v4" fill="none" stroke="#16a34a" stroke-width="2"/>
+      <rect x="449" y="168" width="16" height="13" rx="2" fill="#ffffff" stroke="#16a34a" stroke-width="1.5"/>
+      <circle cx="457" cy="174" r="1.6" fill="#16a34a"/>
+      <text x="474" y="172" text-anchor="start" font-size="11" fill="#16a34a">内存加密 · 不落盘 · 不记录</text>
+      <text x="520" y="200" text-anchor="middle" font-size="10" fill="#6b7188">MRENCLAVE e5c301…9b36a</text>
+
+      <!-- new-api side box (untrusted) -->
+      <rect x="690" y="130" width="108" height="86" rx="8" fill="#f6f7fb" stroke="#6b7188" stroke-width="1.5" stroke-dasharray="5 4"/>
+      <text x="744" y="157" text-anchor="middle" font-size="12" font-weight="700" fill="#0f1222">new-api</text>
+      <text x="744" y="174" text-anchor="middle" font-size="11" fill="#0f1222">控制面</text>
+      <text x="744" y="195" text-anchor="middle" font-size="10.5" fill="#dc2626">不可信 · 只见元数据</text>
+      <!-- enclave -> new-api : only model+token -->
+      <line x1="612" y1="158" x2="684" y2="158" stroke="#6b7188" stroke-width="1.5"/>
+      <polygon points="684,154 684,162 690,158" fill="#6b7188"/>
+      <text x="650" y="150" text-anchor="middle" font-size="10.5" fill="#0f1222">model+token</text>
+      <!-- new-api -> enclave : channel+key -->
+      <line x1="688" y1="190" x2="616" y2="190" stroke="#6b7188" stroke-width="1.5"/>
+      <polygon points="616,186 616,194 610,190" fill="#6b7188"/>
+      <text x="650" y="205" text-anchor="middle" font-size="10.5" fill="#6b7188">channel+key</text>
+
+      <!-- arrow to upstream -->
+      <line x1="520" y1="220" x2="520" y2="250" stroke="#0ea5a4" stroke-width="2"/>
+      <polygon points="515,244 525,244 520,252" fill="#0ea5a4"/>
+      <text x="528" y="240" text-anchor="start" font-size="11" fill="#0ea5a4">严格 TLS 直连官方</text>
+
+      <!-- upstream -->
+      <rect x="445" y="252" width="150" height="40" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.5"/>
+      <text x="520" y="270" text-anchor="middle" font-size="13" fill="#0f1222">官方上游</text>
+      <text x="520" y="285" text-anchor="middle" font-size="10" fill="#6b7188">OpenAI / OpenRouter / …</text>
+
+      <!-- green callout -->
+      <rect x="430" y="312" width="368" height="72" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="614" y="335" text-anchor="middle" font-size="12.5" font-weight="700" fill="#16a34a">「看不到」= 硬件 + 密码学的数学事实</text>
+      <text x="614" y="356" text-anchor="middle" font-size="12" fill="#0f1222">Intel 签名的 Quote 证明「此芯片在跑这段代码」；</text>
+      <text x="614" y="373" text-anchor="middle" font-size="12" fill="#0f1222">跨越 new-api 的只有 {model, token}，绝无 prompt。</text>
+
+      <!-- ================= legend ================= -->
+      <rect x="45" y="404" width="14" height="14" rx="3" fill="#fdeaea" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="65" y="415" text-anchor="start" font-size="11" fill="#6b7188">边界外 · 明文可见/可存</text>
+      <rect x="280" y="404" width="14" height="14" rx="3" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="300" y="415" text-anchor="start" font-size="11" fill="#6b7188">enclave 内 · 加密不可见</text>
+      <rect x="520" y="404" width="14" height="14" rx="3" fill="#f6f7fb" stroke="#6b7188" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <text x="540" y="415" text-anchor="start" font-size="11" fill="#6b7188">不可信控制面 · 只见元数据</text>
+    </svg>
+    <figcaption>左：传统网关自身即明文处理点，能看能存能记；右：enclave 承担转发，new-api 仅作路由控制面，跨界数据只有 {model, token}。</figcaption>
+  </figure>
+
+  <h3>1.2 「无日志」为什么不可信</h3>
+
+  <p>「我们不记录你的数据」这类声明，在传统架构下无法转化为可核验的证据。原因有四：</p>
+  <ul>
+    <li><strong>代码不可见</strong>：你看到的是文档和承诺，看不到线上实际运行的二进制。开源仓库不等于线上部署的就是同一份代码。</li>
+    <li><strong>可随时被改</strong>：即便某一刻代码干净，运营方（或被入侵者、或云厂商 root）可以在任意时刻热更新、注入抓包、加一行落盘逻辑，而你毫无察觉。</li>
+    <li><strong>特权方在链路上</strong>：宿主 OS、Hypervisor、云平台运维都能读进程内存与磁盘，「不记录」对这些特权层没有任何强制约束。</li>
+    <li><strong>无法事后证伪</strong>：即使出了泄露事件，你也很难证明是网关记录了明文——责任与举证都对用户不利。</li>
+  </ul>
+  <p>结论是：<strong>「无日志」在传统架构里只能被承诺，不能被证明。</strong>它的可信度上限等于「你有多相信这家运营方及其所有特权依赖方」。</p>
+
+  <h3>1.3 信任模型：把「相信」变成「可验证」</h3>
+
+  <p>本方案不要求你相信运营方的品德，而是把结论建立在三块可以独立核验的密码学基石上。任意一环对不上，客户端在发送 prompt 之前就会当场判定失败并拒绝发送。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 720 300" width="100%" style="max-width:720px" role="img" font-family="-apple-system,BlinkMacSystemFont,'Noto Sans SC',sans-serif">
+      <rect x="0" y="0" width="720" height="300" fill="#ffffff"/>
+
+      <!-- LEFT: trust a person -->
+      <rect x="20" y="60" width="200" height="150" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="120" y="86" text-anchor="middle" font-size="13" font-weight="700" fill="#dc2626">相信人（口头承诺）</text>
+      <!-- person -->
+      <circle cx="64" cy="132" r="11" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <path d="M46 168 a18 18 0 0 1 36 0" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <!-- speech bubble -->
+      <rect x="96" y="112" width="108" height="46" rx="8" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <polygon points="96,140 86,150 100,148" fill="#ffffff" stroke="#dc2626" stroke-width="1.5"/>
+      <text x="150" y="132" text-anchor="middle" font-size="11" fill="#0f1222">「我不记录</text>
+      <text x="150" y="148" text-anchor="middle" font-size="11" fill="#0f1222">你的数据」</text>
+      <text x="120" y="197" text-anchor="middle" font-size="12" font-weight="700" fill="#dc2626">✗ 不可验证</text>
+
+      <!-- transform arrow -->
+      <line x1="228" y1="135" x2="292" y2="135" stroke="#4f46e5" stroke-width="2.5"/>
+      <polygon points="292,129 292,141 300,135" fill="#4f46e5"/>
+      <text x="262" y="122" text-anchor="middle" font-size="12" font-weight="700" fill="#4f46e5">替换为</text>
+
+      <!-- RIGHT: three verifiable facts -->
+      <rect x="300" y="40" width="300" height="44" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.5"/>
+      <text x="315" y="60" text-anchor="start" font-size="12" font-weight="700" fill="#4f46e5">① 可复现构建</text>
+      <text x="315" y="77" text-anchor="start" font-size="10.5" fill="#0f1222">Go 1.26.1 + Gramine 1.9 → 得到同一 MRENCLAVE 指纹</text>
+      <line x1="450" y1="84" x2="450" y2="90" stroke="#4f46e5" stroke-width="1.5"/>
+      <polygon points="446,88 454,88 450,94" fill="#4f46e5"/>
+
+      <rect x="300" y="96" width="300" height="44" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.5"/>
+      <text x="315" y="116" text-anchor="start" font-size="12" font-weight="700" fill="#4f46e5">② Intel 签名 Quote（DCAP）</text>
+      <text x="315" y="133" text-anchor="start" font-size="10.5" fill="#0f1222">证明「此真芯片正在运行这段确切代码」</text>
+      <line x1="450" y1="140" x2="450" y2="146" stroke="#4f46e5" stroke-width="1.5"/>
+      <polygon points="446,144 454,144 450,150" fill="#4f46e5"/>
+
+      <rect x="300" y="152" width="300" height="44" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.5"/>
+      <text x="315" y="172" text-anchor="start" font-size="12" font-weight="700" fill="#4f46e5">③ RA-TLS 通道绑定</text>
+      <text x="315" y="189" text-anchor="start" font-size="10.5" fill="#0f1222">report_data = SHA-512(TLS SubjectPublicKeyInfo)</text>
+      <line x1="450" y1="196" x2="450" y2="204" stroke="#16a34a" stroke-width="1.5"/>
+      <polygon points="446,202 454,202 450,208" fill="#16a34a"/>
+
+      <!-- conclusion -->
+      <rect x="300" y="208" width="300" height="56" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="2"/>
+      <text x="450" y="231" text-anchor="middle" font-size="13" font-weight="700" fill="#16a34a">✓ 可用密码学验证的数学事实</text>
+      <text x="450" y="251" text-anchor="middle" font-size="11" fill="#0f1222">改一字节 → 指纹改变 → 客户端当场发现</text>
+    </svg>
+    <figcaption>信任迁移：把不可核验的口头承诺，替换为「可复现构建 + Intel 签名 Quote + RA-TLS 通道绑定」三重可独立验证的链条。</figcaption>
+  </figure>
+
+  <p>这三块基石的作用分别是：</p>
+  <ul>
+    <li><strong>MRENCLAVE = 代码 + manifest 的度量</strong>（当前上线值 <code>e5c301b5f4256e086d9ea074e72da445d10a48323e5bc6139992ef995bd9b36a</code>）。它对 enclave 内的代码与配置做哈希，改动任意一字节，指纹即完全改变——等价于 Docker digest / git commit / 前端 SRI。</li>
+    <li><strong>Quote（远程认证凭证）</strong>由 CPU 出具、带 Intel 签名，通过 DCAP 验证签名链，证明「这是一块真的 SGX 芯片，此刻正在运行 MRENCLAVE 所标识的这份确切代码」。伪造不了。</li>
+    <li><strong>RA-TLS 通道绑定</strong>把 <code>report_data</code> 固定为 <code>SHA-512(TLS SubjectPublicKeyInfo)</code>，即公钥指纹被写进被 Intel 签名的报告里。它保证「被认证的那个 enclave，就是你此刻正在通话的这个端点」，而不是被中间人转发或重放来的另一台。</li>
+  </ul>
+  <p>三者相乘产生传递性证明：代码开源可审计 ⇒ 审计确认它<strong>没有把正文写盘 / 入库 / 记日志的代码路径</strong>、且只连编译期写死的官方上游 ⇒ Quote 证明线上跑的就是这份被审计的代码 ⇒ 因此它在结构上<strong>「做不到」偷看</strong>。任何篡改都会改变 MRENCLAVE，验证阶段立刻暴露。</p>
+
+  <h3>1.4 两种模型的对比</h3>
+
+  <table class="wp-t">
+    <thead>
+      <tr><th>维度</th><th>传统 AI 网关</th><th>本方案（SGX + RA-TLS）</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>能否看到 prompt 明文</td><td>能（服务端终止 TLS 后即明文）</td><td>不能（只在 enclave 加密内存中穿过）</td></tr>
+      <tr><td>能否落盘 / 入库 / 记日志</td><td>能，且用户无从察觉</td><td>代码路径中不存在；篡改会改 MRENCLAVE</td></tr>
+      <tr><td>「无日志」如何保证</td><td>口头承诺，不可验证</td><td>可复现构建 + Intel 签名 Quote，可独立核验</td></tr>
+      <tr><td>你需要相信谁</td><td>运营方 + 宿主 OS + 云厂商等全部特权方</td><td>Intel 硬件签名 + 你能自己重建的代码指纹</td></tr>
+      <tr><td>线上代码是否可验证</td><td>否（看不到线上二进制）</td><td>是（MRENCLAVE 逐字节可比对）</td></tr>
+      <tr><td>跨越不可信 new-api 的数据</td><td>不适用（网关本身即可信假设）</td><td>仅 {model, token} 元数据，绝无 prompt 正文</td></tr>
+    </tbody>
+  </table>
+
+  <h3>1.5 信任边界（TCB）与威胁模型</h3>
+
+  <p>本方案明确划定了<strong>可信计算基（TCB）</strong>的边界：</p>
+  <ul>
+    <li><strong>可信（TCB 内）</strong>：Intel SGX CPU 与其认证机制、enclave 内运行的 relay-core 代码、以及被 MRENCLAVE 度量的 Gramine manifest。目的地 URL 与各上游的鉴权画像都<strong>编译进 enclave 并被度量</strong>，运营方无法改动。</li>
+    <li><strong>不可信（TCB 外）</strong>：作为控制面的 new-api、宿主操作系统、Hypervisor、云平台运维、磁盘 / 数据库 / 日志系统。它们都被<strong>默认视为敌手</strong>：只能看到路由所需的 <code>{model, token}</code>，看不到 prompt 与回答正文。</li>
+    <li><strong>官方上游</strong>：OpenAI（<code>Authorization: Bearer</code>）、OpenRouter（<code>Bearer</code> + <code>HTTP-Referer</code> / <code>X-Title</code>）、Anthropic（<code>x-api-key</code> + <code>anthropic-version</code>）、Gemini / AI Studio（<code>x-goog-api-key</code>）。enclave 用编译期写死的官方地址加严格 TLS 直连，凭据在 enclave 内注入。</li>
+  </ul>
+  <p><strong>本方案不声称防护的范围</strong>（如实说明）：上游提供商拿到的仍是你的 prompt 明文——本方案保护的是「本网关及其宿主环境看不到你的数据」，而非上游模型服务方；SGX 侧信道等硬件层面的攻击不在本文讨论范围；单纯拿到 Quote 还不足以完全杜绝伪造，必须再做 DCAP 签名链验证（<code>relay-verify -dcap-verify</code>）。后续章节将逐层展开每一环的实现与验证方法。</p>
+</section>

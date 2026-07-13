@@ -1,0 +1,189 @@
+<section class="wp" id="s-04">
+  <h2>4 · DCAP Quote 结构剖析</h2>
+
+  <p>客户端向 enclave 索取的 <em>attestation</em> 里，核心是一段名为 <b>quote</b> 的二进制。它不是自由格式的 JSON，而是一个由 <b>Intel SGX ABI</b> 规定的、little-endian、定长且带版本的结构体：前 48 字节是 <b>Quote Header</b>，紧接 384 字节的 <b>Report Body</b>（<code>sgx_report_body_t</code>），再往后是 <b>ECDSA-P256 签名</b> 与 <b>QE 证书链（PCK）</b>。正因为布局是硬件/固件定义的定长 ABI，验证器<b>无需任何解析库</b>，按写死的字节偏移裸切即可取字段——这也是为什么本系统的客户端只依赖两个偏移常量：<code>112</code> 与 <code>368</code>。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 880 435" width="100%" style="max-width:720px" role="img" aria-label="DCAP ECDSA Quote 字节布局，标注 Header、Report Body、MRENCLAVE、REPORT_DATA、签名与证书链的偏移">
+      <rect x="0" y="0" width="880" height="435" fill="#ffffff"/>
+      <text x="40" y="20" font-size="14" font-weight="700" fill="#0f1222">DCAP ECDSA Quote 字节布局（示意，非按字节等比）</text>
+
+      <!-- top-level offset ticks -->
+      <text x="40"  y="44" font-size="12" fill="#6b7188" text-anchor="middle">0</text>
+      <text x="150" y="44" font-size="12" fill="#6b7188" text-anchor="middle">48</text>
+      <text x="400" y="44" font-size="12" fill="#6b7188" text-anchor="middle">432</text>
+      <text x="580" y="44" font-size="12" fill="#6b7188" text-anchor="middle">变长</text>
+      <text x="840" y="44" font-size="12" fill="#6b7188" text-anchor="middle">变长</text>
+
+      <!-- top-level bar -->
+      <rect x="40"  y="52" width="110" height="46" rx="8" fill="#f6f7fb" stroke="#6b7188" stroke-width="1.5"/>
+      <rect x="150" y="52" width="250" height="46" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <rect x="400" y="52" width="180" height="46" rx="8" fill="#fdf1e3" stroke="#d97706" stroke-width="1.5"/>
+      <rect x="580" y="52" width="260" height="46" rx="8" fill="#fdf1e3" stroke="#d97706" stroke-width="1.5"/>
+
+      <text x="95"  y="72" font-size="12.5" fill="#0f1222" text-anchor="middle">Quote Header</text>
+      <text x="95"  y="88" font-size="11"   fill="#6b7188" text-anchor="middle">48 B</text>
+      <text x="275" y="72" font-size="12.5" font-weight="700" fill="#0f1222" text-anchor="middle">Report Body</text>
+      <text x="275" y="88" font-size="11"   fill="#6b7188" text-anchor="middle">sgx_report_body_t · 384 B</text>
+      <text x="490" y="72" font-size="12.5" fill="#0f1222" text-anchor="middle">ECDSA-P256</text>
+      <text x="490" y="88" font-size="11"   fill="#6b7188" text-anchor="middle">签名</text>
+      <text x="710" y="72" font-size="12.5" fill="#0f1222" text-anchor="middle">QE 证书链</text>
+      <text x="710" y="88" font-size="11"   fill="#6b7188" text-anchor="middle">PCK → Intel Root CA</text>
+
+      <!-- DCAP domain bracket under signature + cert chain -->
+      <path d="M400 104 L400 110 L840 110 L840 104" fill="none" stroke="#d97706" stroke-width="1.5"/>
+      <text x="620" y="126" font-size="12" fill="#d97706" text-anchor="middle">③④ + 头部/正文 → 由 DCAP 验 Intel 签名链</text>
+
+      <!-- zoom trapezoid: report body -> exploded view -->
+      <polygon points="150,98 400,98 840,250 40,250" fill="#eef0fe" opacity="0.28"/>
+      <line x1="150" y1="98" x2="40"  y2="250" stroke="#4f46e5" stroke-width="1.3" stroke-dasharray="5 4"/>
+      <line x1="400" y1="98" x2="840" y2="250" stroke="#4f46e5" stroke-width="1.3" stroke-dasharray="5 4"/>
+      <text x="440" y="185" font-size="12.5" fill="#4f46e5" text-anchor="middle">放大 Report Body ▾（偏移以 body 内相对量标注）</text>
+
+      <!-- ISV callout above exploded bar -->
+      <path d="M573 244 L573 240 L707 240 L707 244" fill="none" stroke="#d97706" stroke-width="1.3"/>
+      <rect x="512" y="216" width="256" height="20" rx="6" fill="#ffffff" stroke="#d97706" stroke-width="1.2"/>
+      <text x="640" y="230" font-size="11.5" fill="#d97706" text-anchor="middle">ISV_PROD_ID/SVN @304/@306 · ISV_FAMILY_ID @352</text>
+
+      <!-- exploded report body bar (body-relative bytes 0..384) -->
+      <rect x="40.00"  y="250" width="133.33" height="48" rx="6" fill="#ffffff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <rect x="173.33" y="250" width="66.67"  height="48" rx="6" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <rect x="240.00" y="250" width="66.67"  height="48" rx="6" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.5"/>
+      <rect x="306.67" y="250" width="66.67"  height="48" rx="6" fill="#ffffff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <rect x="373.33" y="250" width="66.67"  height="48" rx="6" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.5"/>
+      <rect x="440.00" y="250" width="133.33" height="48" rx="6" fill="#ffffff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <rect x="573.33" y="250" width="12.50"  height="48" rx="3" fill="#fdf1e3" stroke="#d97706" stroke-width="1.5"/>
+      <rect x="585.83" y="250" width="87.50"  height="48" rx="6" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.5"/>
+      <rect x="673.33" y="250" width="33.33"  height="48" rx="6" fill="#ffffff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <rect x="706.67" y="250" width="133.33" height="48" rx="6" fill="#e2f5f4" stroke="#0ea5a4" stroke-width="2"/>
+
+      <text x="106.7" y="272" font-size="10.5" fill="#0f1222" text-anchor="middle">CPU_SVN · MISC</text>
+      <text x="106.7" y="286" font-size="10.5" fill="#0f1222" text-anchor="middle">ATTRIBUTES</text>
+      <text x="206.7" y="278" font-size="10.5" font-weight="700" fill="#4f46e5" text-anchor="middle">MR_ENCLAVE</text>
+      <text x="273.3" y="278" font-size="10"   fill="#6b7188" text-anchor="middle">rsvd</text>
+      <text x="340.0" y="278" font-size="10"   fill="#0f1222" text-anchor="middle">MR_SIGNER</text>
+      <text x="406.7" y="278" font-size="10"   fill="#6b7188" text-anchor="middle">rsvd</text>
+      <text x="506.7" y="278" font-size="10.5" fill="#0f1222" text-anchor="middle">CONFIG_ID</text>
+      <text x="629.6" y="278" font-size="10"   fill="#6b7188" text-anchor="middle">rsvd</text>
+      <text x="690.0" y="278" font-size="9"    fill="#0f1222" text-anchor="middle">FAM_ID</text>
+      <text x="773.3" y="278" font-size="10.5" font-weight="700" fill="#0ea5a4" text-anchor="middle">REPORT_DATA</text>
+
+      <!-- body-relative offset ticks -->
+      <text x="40"     y="314" font-size="11" fill="#6b7188" text-anchor="middle">+0</text>
+      <text x="173.33" y="314" font-size="11" fill="#4f46e5" text-anchor="middle">+64</text>
+      <text x="240"    y="314" font-size="11" fill="#6b7188" text-anchor="middle">+96</text>
+      <text x="306.67" y="314" font-size="11" fill="#6b7188" text-anchor="middle">+128</text>
+      <text x="440"    y="314" font-size="11" fill="#6b7188" text-anchor="middle">+192</text>
+      <text x="573.33" y="314" font-size="11" fill="#6b7188" text-anchor="middle">+256</text>
+      <text x="706.67" y="314" font-size="11" fill="#0ea5a4" text-anchor="middle">+320</text>
+      <text x="840"    y="314" font-size="11" fill="#6b7188" text-anchor="middle">+384</text>
+
+      <!-- MRENCLAVE callout (below) -->
+      <line x1="206.7" y1="298" x2="206.7" y2="332" stroke="#4f46e5" stroke-width="1.5"/>
+      <rect x="44" y="332" width="362" height="44" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.8"/>
+      <text x="60" y="352" font-size="12.5" font-weight="700" fill="#4f46e5">MRENCLAVE · 绝对偏移 112 · 32 B</text>
+      <text x="60" y="369" font-size="11.5" fill="#0f1222">客户端：与 pin 的 e5c3…9b36a 逐字节比对</text>
+
+      <!-- REPORT_DATA callout (below) -->
+      <line x1="773.3" y1="298" x2="773.3" y2="332" stroke="#0ea5a4" stroke-width="1.5"/>
+      <rect x="474" y="332" width="362" height="44" rx="8" fill="#e2f5f4" stroke="#0ea5a4" stroke-width="1.8"/>
+      <text x="490" y="352" font-size="12.5" font-weight="700" fill="#0ea5a4">REPORT_DATA · 绝对偏移 368 · 64 B</text>
+      <text x="490" y="369" font-size="11.5" fill="#0f1222">客户端：== SHA-512(服务器 TLS SPKI) 通道绑定</text>
+
+      <!-- legend -->
+      <rect x="40"  y="400" width="14" height="14" rx="3" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.6"/>
+      <text x="60"  y="411" font-size="11.5" fill="#0f1222">MRENCLAVE 代码度量</text>
+      <rect x="230" y="400" width="14" height="14" rx="3" fill="#e2f5f4" stroke="#0ea5a4" stroke-width="1.6"/>
+      <text x="250" y="411" font-size="11.5" fill="#0f1222">REPORT_DATA 公钥绑定</text>
+      <rect x="440" y="400" width="14" height="14" rx="3" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.6"/>
+      <text x="460" y="411" font-size="11.5" fill="#0f1222">保留/其它 SGX 字段</text>
+      <rect x="620" y="400" width="14" height="14" rx="3" fill="#fdf1e3" stroke="#d97706" stroke-width="1.6"/>
+      <text x="640" y="411" font-size="11.5" fill="#0f1222">DCAP 验签域（签名+证书链）</text>
+    </svg>
+    <figcaption>Quote 是定长 ABI：客户端仅按偏移 112 / 368 裸切出 MRENCLAVE 与 REPORT_DATA，签名与 PCK 证书链交给 DCAP 验真。</figcaption>
+  </figure>
+
+  <h3>4.1 关键字段与偏移速查</h3>
+
+  <table class="wp-t">
+    <thead>
+      <tr><th>段 / 字段</th><th>绝对偏移</th><th>长度</th><th>含义</th><th>谁来读 · 怎么用</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Quote Header</td><td>0</td><td>48 B</td><td>版本 / attestation key type / QE 信息</td><td>DCAP：验签入口</td></tr>
+      <tr><td>Report Body</td><td>48</td><td>384 B</td><td><code>sgx_report_body_t</code> 结构体</td><td>被签名覆盖的主体</td></tr>
+      <tr><td>↳ MR_ENCLAVE</td><td>112</td><td>32 B</td><td>代码 + manifest 的硬件度量指纹</td><td><b>客户端</b>：与 pin 值逐字节比对</td></tr>
+      <tr><td>↳ MR_SIGNER</td><td>176</td><td>32 B</td><td>签名者（制作 enclave 的 key）度量</td><td>可选：签名者白名单策略</td></tr>
+      <tr><td>↳ ISV_PROD_ID / SVN</td><td>304 / 306</td><td>2 B / 2 B</td><td>产品号 / 安全版本号（防回滚）</td><td>可选：TCB/版本下限策略</td></tr>
+      <tr><td>↳ REPORT_DATA</td><td>368</td><td>64 B</td><td>enclave 自填 = SHA-512(TLS SPKI)</td><td><b>客户端</b>：与 SHA-512(SPKI) 比对</td></tr>
+      <tr><td>ECDSA-P256 签名</td><td>432</td><td>变长</td><td>QE 对 Header+Body 的 ECDSA 签名</td><td>DCAP：验 quote 真伪</td></tr>
+      <tr><td>QE 证书链（PCK）</td><td>变长</td><td>变长</td><td>PCK 证书链 → Intel SGX Root CA</td><td>DCAP：验签名密钥可信</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.2 客户端只读这两段字节</h3>
+
+  <p>控制面（new-api）与宿主机都无法伪造 quote，因此客户端的本地解析<b>刻意极简</b>：只切两段字节回答两个正交的问题——"跑的是不是那份代码"（MRENCLAVE）与"我是不是在直接和那个 enclave 通话"（REPORT_DATA）。其余字段（Header、ECDSA 签名、QE 证书链/PCK）客户端<b>不解析</b>，整体交给 DCAP（<code>libsgx_dcap_quoteverify</code>）上溯到 Intel SGX Root CA 验真。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 760 290" width="100%" style="max-width:720px" role="img" aria-label="客户端从 quote 切出 MRENCLAVE 与 REPORT_DATA 两段并各自比对的流程">
+      <rect x="0" y="0" width="760" height="290" fill="#ffffff"/>
+      <text x="24" y="22" font-size="14" font-weight="700" fill="#0f1222">客户端本地只读 2 段，其余交给 DCAP</text>
+
+      <!-- Row A : MRENCLAVE -->
+      <text x="24" y="54" font-size="11.5" fill="#4f46e5">① 我信任的是"那份代码"</text>
+      <rect x="24" y="62" width="190" height="52" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="119" y="86" font-size="12" font-weight="700" fill="#4f46e5" text-anchor="middle">quote[112:144]</text>
+      <text x="119" y="103" font-size="11" fill="#0f1222" text-anchor="middle">MRENCLAVE · 32 B</text>
+
+      <line x1="214" y1="88" x2="260" y2="88" stroke="#0f1222" stroke-width="1.8"/>
+      <polygon points="268,88 259,83 259,93" fill="#0f1222"/>
+      <text x="241" y="78" font-size="10.5" fill="#6b7188" text-anchor="middle">切 32B</text>
+
+      <rect x="270" y="62" width="196" height="52" rx="8" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="368" y="86" font-size="12" fill="#0f1222" text-anchor="middle">pin 值（可复现构建）</text>
+      <text x="368" y="103" font-size="11" fill="#6b7188" text-anchor="middle">e5c3…9b36a</text>
+
+      <line x1="466" y1="88" x2="512" y2="88" stroke="#0f1222" stroke-width="1.8"/>
+      <polygon points="520,88 511,83 511,93" fill="#0f1222"/>
+      <text x="493" y="78" font-size="10.5" fill="#6b7188" text-anchor="middle">hex==</text>
+
+      <rect x="522" y="62" width="214" height="52" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.8"/>
+      <text x="629" y="86" font-size="12" font-weight="700" fill="#16a34a" text-anchor="middle">✓ 审计过 · 不落盘</text>
+      <text x="629" y="103" font-size="11" fill="#0f1222" text-anchor="middle">跑的就是这份构建</text>
+
+      <!-- Row B : REPORT_DATA -->
+      <text x="24" y="150" font-size="11.5" fill="#0ea5a4">② 我在跟"那个 enclave"通话</text>
+      <rect x="24" y="158" width="190" height="52" rx="8" fill="#e2f5f4" stroke="#0ea5a4" stroke-width="2"/>
+      <text x="119" y="182" font-size="12" font-weight="700" fill="#0ea5a4" text-anchor="middle">quote[368:432]</text>
+      <text x="119" y="199" font-size="11" fill="#0f1222" text-anchor="middle">REPORT_DATA · 64 B</text>
+
+      <line x1="214" y1="184" x2="260" y2="184" stroke="#0f1222" stroke-width="1.8"/>
+      <polygon points="268,184 259,179 259,189" fill="#0f1222"/>
+      <text x="241" y="174" font-size="10.5" fill="#6b7188" text-anchor="middle">切 64B</text>
+
+      <rect x="270" y="158" width="196" height="52" rx="8" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="368" y="182" font-size="12" fill="#0f1222" text-anchor="middle">SHA-512(TLS SPKI)</text>
+      <text x="368" y="199" font-size="11" fill="#6b7188" text-anchor="middle">取自实际出示的证书</text>
+
+      <line x1="466" y1="184" x2="512" y2="184" stroke="#0f1222" stroke-width="1.8"/>
+      <polygon points="520,184 511,179 511,189" fill="#0f1222"/>
+      <text x="493" y="174" font-size="10.5" fill="#6b7188" text-anchor="middle">==</text>
+
+      <rect x="522" y="158" width="214" height="52" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.8"/>
+      <text x="629" y="182" font-size="12" font-weight="700" fill="#16a34a" text-anchor="middle">✓ 通道绑定</text>
+      <text x="629" y="199" font-size="11" fill="#0f1222" text-anchor="middle">无中间人转发</text>
+
+      <!-- footer note -->
+      <line x1="24" y1="238" x2="736" y2="238" stroke="#cbd0e0" stroke-width="1.2" stroke-dasharray="4 4"/>
+      <text x="24" y="262" font-size="11.5" fill="#6b7188">其余字段（Header 0–48 · ECDSA 签名 · QE 证书链/PCK）客户端不解析 → 全部交给 DCAP 验 Intel 签名链。</text>
+    </svg>
+    <figcaption>MRENCLAVE 比对回答"跑的是不是那份代码"，REPORT_DATA 比对回答"是不是在直接和那个 enclave 通话"。</figcaption>
+  </figure>
+
+  <ul>
+    <li><b>MR_ENCLAVE @112（32 B）</b>：CPU 在加载时对初始代码页 + 数据页 + manifest 算出的度量。可复现构建让客户端能<b>独立重算</b>出 pin 值 <code>e5c3…9b36a</code>，无需向运营方索取；只要相等，运行的字节就是那份审计过、不落盘、只连官方上游的代码。</li>
+    <li><b>REPORT_DATA @368（64 B）</b>：enclave 在内部生成 TLS 密钥对时，把 <code>SHA-512(SubjectPublicKeyInfo)</code> 写进这 64 字节；它被 CPU 签进 quote，从而把"这把公钥"与"这个 enclave"硬件绑定，堵死 quote 回放 / 中间人代理。</li>
+    <li><b>不由客户端解析的部分</b>：Header、ECDSA-P256 签名、QE 证书链（PCK）——它们的价值在 DCAP 阶段体现，用来把 quote 的真伪上溯到 Intel SGX Root CA，并核对 TCB / QE identity。</li>
+  </ul>
+</section>

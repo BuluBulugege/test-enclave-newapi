@@ -1,0 +1,76 @@
+<section class="wp" id="s-00">
+  <h2>0 · 全链路总览</h2>
+
+  <p>一句话讲清整套系统：你的客户端在发送任何 prompt <em>之前</em>，先用远程认证（DCAP + RA-TLS）验证一个跑在 Intel SGX enclave 里的 <b>relay-core</b> —— 确认它就是那份可复现编译、经过审计、<b>不落盘 / 不入库 / 不记日志</b>的代码（MRENCLAVE 对得上）—— 然后把明文 prompt 经加密可信通道交给 enclave，由 enclave 直连 <b>官方上游</b>（OpenAI / OpenRouter / Anthropic / Gemini）；而 <b>new-api 只是不可信的控制面</b>，只回答"用哪个渠道、扣多少 token"这类路由问题，全程<b>看不到也存不下</b>你的正文。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 720 460" width="100%" style="max-width:720px" role="img"
+         aria-label="端到端架构图：客户端经 RA-TLS 到 SGX enclave，再经官方 TLS 到官方上游；new-api 作为不可信控制面仅交换 model 与 token 元数据"
+         font-family="-apple-system,'Noto Sans SC','Segoe UI',sans-serif">
+
+      <!-- 可信区背景带（prompt 明文仅在此路径） -->
+      <rect x="12" y="44" width="696" height="128" rx="14" fill="#e7f6ec" fill-opacity="0.5" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="26" y="63" font-size="12" font-weight="700" fill="#146c2e">可信区 · prompt 明文仅在此路径流动</text>
+
+      <!-- ===== 顶部三节点（实线=加密可信） ===== -->
+
+      <!-- 你（客户端） -->
+      <rect x="28" y="78" width="176" height="84" rx="8" fill="#ffffff" stroke="#cbd0e0" stroke-width="1.5"/>
+      <text x="116" y="112" text-anchor="middle" font-size="15" font-weight="700" fill="#0f1222">你（客户端）</text>
+      <text x="116" y="134" text-anchor="middle" font-size="11.5" fill="#6b7188">先验 quote，再发 prompt</text>
+
+      <!-- SGX Enclave -->
+      <rect x="272" y="70" width="192" height="100" rx="8" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="368" y="98" text-anchor="middle" font-size="15" font-weight="700" fill="#4f46e5">SGX Enclave · relay-core</text>
+      <text x="368" y="120" text-anchor="middle" font-size="12" fill="#3a3f5c">RA-TLS 终止 · 加密内存转发</text>
+      <text x="368" y="139" text-anchor="middle" font-size="11.5" fill="#3a3f5c">不落盘 · 不入库 · 不记日志</text>
+      <text x="368" y="158" text-anchor="middle" font-size="9.5" fill="#6b7188" font-family="ui-monospace,Menlo,monospace">MRENCLAVE e5c301b5…5bd9b36a</text>
+
+      <!-- 官方上游 -->
+      <rect x="528" y="78" width="176" height="84" rx="8" fill="#ffffff" stroke="#0ea5a4" stroke-width="1.5"/>
+      <text x="616" y="104" text-anchor="middle" font-size="15" font-weight="700" fill="#0ea5a4">官方上游</text>
+      <text x="616" y="126" text-anchor="middle" font-size="11" fill="#3a3f5c">OpenAI · OpenRouter</text>
+      <text x="616" y="144" text-anchor="middle" font-size="11" fill="#3a3f5c">Anthropic · Gemini</text>
+
+      <!-- 箭头1：你 -> enclave（RA-TLS，实线，加密可信） -->
+      <line x1="204" y1="120" x2="263" y2="120" stroke="#0ea5a4" stroke-width="2"/>
+      <polygon points="272,120 263,115 263,125" fill="#0ea5a4"/>
+      <text x="238" y="104" text-anchor="middle" font-size="11" font-weight="700" fill="#0f766e">RA-TLS</text>
+      <text x="238" y="116" text-anchor="middle" font-size="9.5" fill="#6b7188">加密·可信</text>
+
+      <!-- 箭头2：enclave -> 官方上游（官方 TLS，实线，加密可信） -->
+      <line x1="464" y1="120" x2="519" y2="120" stroke="#0ea5a4" stroke-width="2"/>
+      <polygon points="528,120 519,115 519,125" fill="#0ea5a4"/>
+      <text x="496" y="104" text-anchor="middle" font-size="11" font-weight="700" fill="#0f766e">官方 TLS</text>
+      <text x="496" y="116" text-anchor="middle" font-size="9.5" fill="#6b7188">加密·可信</text>
+
+      <!-- ===== 不可信控制面（下方虚线框） ===== -->
+      <rect x="258" y="290" width="220" height="76" rx="8" fill="#fff8ee" stroke="#d97706" stroke-width="1.8" stroke-dasharray="6 4"/>
+      <text x="368" y="318" text-anchor="middle" font-size="13.5" font-weight="700" fill="#b45309">new-api 控制面（不可信）</text>
+      <text x="368" y="340" text-anchor="middle" font-size="11" fill="#92400e">只见路由元数据 · 永不见 prompt</text>
+      <text x="368" y="356" text-anchor="middle" font-size="10" fill="#a16207">宿主 / 数据库 / 运营方均不可信</text>
+
+      <!-- enclave <-> new-api 的红色虚线边（不可信边界，双向） -->
+      <line x1="368" y1="174" x2="368" y2="288" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 5"/>
+      <polygon points="368,172 362,181 374,181" fill="#dc2626"/>
+      <polygon points="368,290 362,281 374,281" fill="#dc2626"/>
+      <text x="384" y="216" font-size="11.5" font-weight="700" fill="#b91c1c">↓ 只传 {model, token}</text>
+      <text x="384" y="238" font-size="11.5" font-weight="700" fill="#b91c1c">↑ 收路由元数据</text>
+
+      <!-- ===== 醒目标注 ===== -->
+      <rect x="12" y="384" width="696" height="34" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.5"/>
+      <!-- 小挂锁图标 -->
+      <path d="M31.5 401 v-4 a4 4 0 0 1 8 0 v4" stroke="#146c2e" stroke-width="1.8" fill="none"/>
+      <rect x="28.5" y="401" width="14" height="11" rx="2" fill="#16a34a"/>
+      <circle cx="35.5" cy="406" r="1.4" fill="#e7f6ec"/>
+      <text x="52" y="406" font-size="13" font-weight="700" fill="#146c2e">prompt 只在 你 ↔ enclave ↔ 官方上游 之间流动，绝不进 new-api</text>
+
+      <!-- ===== 图例 ===== -->
+      <line x1="20" y1="440" x2="46" y2="440" stroke="#0ea5a4" stroke-width="2.5"/>
+      <text x="52" y="444" font-size="11.5" fill="#6b7188">实线 = 加密可信通道（RA-TLS / 官方 TLS）</text>
+      <line x1="376" y1="440" x2="402" y2="440" stroke="#dc2626" stroke-width="2.5" stroke-dasharray="6 5"/>
+      <text x="408" y="444" font-size="11.5" fill="#6b7188">红虚线 = 不可信边界（只应有 {model, token}）</text>
+    </svg>
+    <figcaption>端到端信任边界：明文只走"你 ↔ enclave ↔ 官方上游"这条实线路径，new-api 在红色不可信边界之外，仅交换 {model, token} 与路由元数据。</figcaption>
+  </figure>
+</section>

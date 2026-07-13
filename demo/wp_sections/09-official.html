@@ -1,0 +1,212 @@
+<section class="wp" id="s-09">
+  <h2>9 · 官方 URL 防 MITM + 多 provider 鉴权</h2>
+
+  <p>第 8 节保证了"进 enclave 的只有 <code>{model, token}</code>"，但还有一个对称的问题：<strong>enclave 出去时到底连的是谁？</strong>如果运营方能把"官方 OpenAI 渠道"的目的地悄悄改成 <code>evil.com</code>，那明文 prompt 一出 enclave 就落进了中间人（MITM）手里，前面所有的度量与不落盘都白费了。本节的答案是：<strong>每个官方渠道的目的地 URL、以及每家上游的鉴权画像（auth profile），都被编译写死进 enclave、被 MRENCLAVE 度量</strong>；宿主 / new-api 给的 <code>base_url</code> 对官方渠道<strong>一律无视</strong>，enclave 只拨打自己代码里那份写死的官方 host。</p>
+
+  <h3>9.1 目的地写死进 enclave：宿主的 base_url 被无视</h3>
+
+  <p>官方 host 表放在一个<strong>纯叶子包</strong> <code>pkg/officialurls</code> 里——它只依赖标准库，不拉入 <code>model / service / logger</code> 等任何业务包，因此能干净地链接进 relay-core enclave，并随代码一起被<strong>逐页度量进 MRENCLAVE</strong>（见第 3 节）。表按 <code>channelType</code> 下标索引，例如下标 <code>1</code> 就是 <code>https://api.openai.com</code>。因为这张表在 <code>.rodata</code> 里，改动其中任何一个字节都会让 MRENCLAVE 失配、客户端认证当场变红。</p>
+
+  <p>运行时，enclave <strong>从不信任</strong>控制面回传的目的地。控制面在选路结果里带一个 <code>is_official</code> 字段，但那只是"提示（host hint）"；enclave 收到后用 <code>officialurls.HasOfficial(channelType)</code> + <code>ProfileFor(channelType)</code> <strong>自己重新判定</strong>，再用 <code>officialUpstreamURL()</code> 把请求 URL 用"编译写死的 host + 客户端原始 path"拼出来。宿主传来的任何 <code>base_url</code> 覆盖值,在官方分支里根本不会被读取。这就是防 MITM 的核心：<strong>目的地由 enclave 里的代码决定，不可信的宿主动不了它</strong>。</p>
+
+  <h3>9.2 每家一套鉴权画像（auth profile）</h3>
+
+  <p>不同 provider 的鉴权方式并不一样，这些差异同样被写进 enclave、被度量。relay-core 保持"忠实透传"：客户端按各家原生格式发到原生 path，enclave 只负责<strong>强制官方 host、按下表注入标准凭据、逐字节转发 body、绝不落盘</strong>。注意——<strong>客户端进网关用的 token 永远不会被转发到上游</strong>；上游真正的 API key 由 enclave 自有的密钥库注入，宿主看不到。</p>
+
+  <table class="wp-t">
+    <thead>
+      <tr><th>Provider（type id）</th><th>官方目的地 host</th><th>鉴权头</th><th>额外必需头</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><strong>OpenAI</strong>（1）</td>
+        <td><code>api.openai.com</code></td>
+        <td><code>Authorization: Bearer &lt;key&gt;</code></td>
+        <td>—</td>
+      </tr>
+      <tr>
+        <td><strong>OpenRouter</strong>（20）</td>
+        <td><code>openrouter.ai/api</code></td>
+        <td><code>Authorization: Bearer &lt;key&gt;</code></td>
+        <td><code>HTTP-Referer</code>、<code>X-Title</code>（归因头）</td>
+      </tr>
+      <tr>
+        <td><strong>Anthropic</strong>（14）</td>
+        <td><code>api.anthropic.com</code></td>
+        <td><code>x-api-key: &lt;key&gt;</code></td>
+        <td><code>anthropic-version: 2023-06-01</code></td>
+      </tr>
+      <tr>
+        <td><strong>Gemini / AI Studio</strong>（24）</td>
+        <td><code>generativelanguage.googleapis.com</code></td>
+        <td><code>x-goog-api-key: &lt;key&gt;</code></td>
+        <td>—</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>这份 profile 表本身就是一份<strong>可审计的官方上游白名单</strong>：只有表里登记的 provider 才能被 enclave 当作"官方"来服务。远程验证者核对 MRENCLAVE，就等于确认了"这套 enclave 到底能以官方身份连哪几家、各自怎么注入凭据"——一切都是编译期确定、无法在运行时被运营方偷偷加塞或改写的。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 780 500" width="100%" style="max-width:720px" role="img"
+         aria-label="enclave 内编译写死的官方 URL 表：OpenAI/OpenRouter/Anthropic/Gemini 各自的官方 host 与鉴权头；来自不可信宿主的把 base_url 改成 evil.com 的箭头被拒绝"
+         font-family="-apple-system,'Noto Sans SC','Segoe UI',sans-serif">
+      <rect x="1" y="1" width="778" height="498" rx="10" fill="#ffffff" stroke="#e6e7f0" stroke-width="1"/>
+      <text x="390" y="30" text-anchor="middle" font-size="15" font-weight="700" fill="#0f1222">官方渠道：目的地 URL 与鉴权画像编译进 enclave，宿主改不动</text>
+
+      <!-- 不可信宿主 -->
+      <rect x="24" y="150" width="180" height="124" rx="10" fill="#fff8ee" stroke="#d97706" stroke-width="1.8" stroke-dasharray="6 4"/>
+      <text x="114" y="180" text-anchor="middle" font-size="13.5" font-weight="700" fill="#b45309">宿主 / new-api</text>
+      <text x="114" y="200" text-anchor="middle" font-size="11" fill="#92400e">（不可信控制面）</text>
+      <text x="114" y="232" text-anchor="middle" font-size="11" fill="#92400e">声称 base_url =</text>
+      <text x="114" y="252" text-anchor="middle" font-size="11.5" font-weight="700" font-family="ui-monospace,Menlo,Consolas,monospace" fill="#dc2626">https://evil.com</text>
+
+      <!-- 篡改箭头（被拒绝） -->
+      <text x="248" y="192" text-anchor="middle" font-size="11" font-weight="700" fill="#b91c1c">改 base_url</text>
+      <text x="248" y="208" text-anchor="middle" font-size="11" font-weight="700" fill="#b91c1c">→ evil.com</text>
+      <line x1="204" y1="228" x2="284" y2="228" stroke="#dc2626" stroke-width="2" stroke-dasharray="6 4"/>
+      <polygon points="286,228 278,223 278,233" fill="#dc2626"/>
+      <!-- ❌ 拦截标记 -->
+      <circle cx="302" cy="228" r="15" fill="#fdeaea" stroke="#dc2626" stroke-width="2.2"/>
+      <line x1="296" y1="222" x2="308" y2="234" stroke="#dc2626" stroke-width="2.2"/>
+      <line x1="308" y1="222" x2="296" y2="234" stroke="#dc2626" stroke-width="2.2"/>
+      <text x="252" y="256" text-anchor="middle" font-size="10.5" fill="#b91c1c">被 enclave 忽略 / 拒绝</text>
+
+      <!-- Enclave -->
+      <rect x="320" y="60" width="440" height="400" rx="12" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="540" y="88" text-anchor="middle" font-size="14" font-weight="700" fill="#4f46e5">SGX Enclave · 官方 URL 表 + 多 provider 鉴权画像</text>
+      <text x="540" y="108" text-anchor="middle" font-size="10.5" fill="#6b7188">pkg/officialurls（纯叶子包）· 编译写死 · 被 MRENCLAVE 度量</text>
+
+      <!-- 表头 -->
+      <rect x="332" y="122" width="416" height="30" rx="6" fill="#f6f7fb" stroke="#cbd0e0" stroke-width="1"/>
+      <text x="344" y="142" font-size="12" font-weight="700" fill="#3a3f5c">Provider（type）</text>
+      <text x="456" y="142" font-size="12" font-weight="700" fill="#3a3f5c">官方目的地 host</text>
+      <text x="688" y="142" text-anchor="middle" font-size="12" font-weight="700" fill="#3a3f5c">鉴权头</text>
+
+      <!-- 行分隔线 -->
+      <line x1="332" y1="216" x2="748" y2="216" stroke="#e6e7f0" stroke-width="1"/>
+      <line x1="332" y1="278" x2="748" y2="278" stroke="#e6e7f0" stroke-width="1"/>
+      <line x1="332" y1="340" x2="748" y2="340" stroke="#e6e7f0" stroke-width="1"/>
+
+      <!-- Row 1 OpenAI -->
+      <text x="344" y="180" font-size="13" font-weight="700" fill="#0f1222">OpenAI</text>
+      <text x="344" y="198" font-size="10" fill="#6b7188">type 1</text>
+      <text x="456" y="190" font-size="12" font-family="ui-monospace,Menlo,Consolas,monospace" fill="#0f1222">api.openai.com</text>
+      <rect x="628" y="170" width="120" height="30" rx="15" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.5"/>
+      <text x="688" y="189" text-anchor="middle" font-size="11.5" font-weight="700" fill="#4338ca">Bearer</text>
+
+      <!-- Row 2 OpenRouter -->
+      <text x="344" y="242" font-size="13" font-weight="700" fill="#0f1222">OpenRouter</text>
+      <text x="344" y="260" font-size="10" fill="#6b7188">type 20</text>
+      <text x="456" y="252" font-size="12" font-family="ui-monospace,Menlo,Consolas,monospace" fill="#0f1222">openrouter.ai/api</text>
+      <rect x="628" y="228" width="120" height="38" rx="10" fill="#e3f6f5" stroke="#0ea5a4" stroke-width="1.5"/>
+      <text x="688" y="244" text-anchor="middle" font-size="11" font-weight="700" fill="#0f766e">Bearer +</text>
+      <text x="688" y="259" text-anchor="middle" font-size="9.5" fill="#0f766e">Referer / X-Title</text>
+
+      <!-- Row 3 Anthropic -->
+      <text x="344" y="304" font-size="13" font-weight="700" fill="#0f1222">Anthropic</text>
+      <text x="344" y="322" font-size="10" fill="#6b7188">type 14</text>
+      <text x="456" y="314" font-size="12" font-family="ui-monospace,Menlo,Consolas,monospace" fill="#0f1222">api.anthropic.com</text>
+      <rect x="628" y="290" width="120" height="38" rx="10" fill="#fff8ee" stroke="#d97706" stroke-width="1.5"/>
+      <text x="688" y="306" text-anchor="middle" font-size="11" font-weight="700" fill="#b45309">x-api-key</text>
+      <text x="688" y="321" text-anchor="middle" font-size="9.5" fill="#b45309">+ version 固定</text>
+
+      <!-- Row 4 Gemini -->
+      <text x="344" y="360" font-size="13" font-weight="700" fill="#0f1222">Gemini</text>
+      <text x="344" y="378" font-size="10" fill="#6b7188">AI Studio · type 24</text>
+      <text x="456" y="366" font-size="11" font-family="ui-monospace,Menlo,Consolas,monospace" fill="#0f1222">generativelanguage</text>
+      <text x="456" y="380" font-size="11" font-family="ui-monospace,Menlo,Consolas,monospace" fill="#0f1222">.googleapis.com</text>
+      <rect x="628" y="352" width="120" height="30" rx="15" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="688" y="371" text-anchor="middle" font-size="10.5" font-weight="700" fill="#15803d">x-goog-api-key</text>
+
+      <!-- Enclave 内 footer -->
+      <rect x="332" y="410" width="416" height="38" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.5"/>
+      <text x="540" y="427" text-anchor="middle" font-size="11.5" font-weight="700" fill="#146c2e">官方渠道：忽略宿主 base_url · 只有 {model, token} 过界</text>
+      <text x="540" y="442" text-anchor="middle" font-size="9.5" fill="#146c2e">外呼固定走编译写死 host（strict-TLS），上游凭据由 enclave 注入</text>
+
+      <!-- 图例 -->
+      <circle cx="32" cy="476" r="8" fill="#fdeaea" stroke="#dc2626" stroke-width="1.8"/>
+      <line x1="28" y1="472" x2="36" y2="480" stroke="#dc2626" stroke-width="1.8"/>
+      <line x1="36" y1="472" x2="28" y2="480" stroke="#dc2626" stroke-width="1.8"/>
+      <text x="46" y="480" font-size="10.5" fill="#6b7188">宿主篡改目的地 → 被拒绝 / 忽略</text>
+      <rect x="320" y="468" width="16" height="16" rx="4" fill="#eef0fe" stroke="#4f46e5" stroke-width="1.5"/>
+      <text x="342" y="480" font-size="10.5" fill="#6b7188">彩色标签 = 各 provider 各自鉴权头（编译写死）</text>
+    </svg>
+    <figcaption>enclave 里那张编译写死、被 MRENCLAVE 度量的官方 URL + 鉴权画像表；宿主想把"官方"指向 evil.com 的企图，在官方分支被直接忽略。</figcaption>
+  </figure>
+
+  <h3>9.3 enclave 自主重判：不信宿主的 is_official</h3>
+
+  <p>把这套逻辑压成一句话：<strong>宿主只能"建议"，enclave 自己"裁决"。</strong>控制面回传的 <code>is_official</code> 是提示；enclave 用编译进自己的官方表重新判定——命中官方 URL 表<em>且</em>有对应鉴权画像，才用"写死 host + 该 provider 专属鉴权头"经 strict-TLS 外呼；否则一律拒绝为"非可信官方上游"（HTTP 400）。运营方既没法把官方指向中间人，也没法凭空把一个未登记的上游冒充成官方。</p>
+
+  <figure class="fig">
+    <svg viewBox="0 0 760 300" width="100%" style="max-width:720px" role="img"
+         aria-label="enclave 不信任宿主的 is_official 提示，用编译进的官方表重新判定：命中则用写死 host 加专属鉴权头经官方 TLS 外呼，未命中则拒绝 400"
+         font-family="-apple-system,'Noto Sans SC','Segoe UI',sans-serif">
+      <defs>
+        <marker id="s09mut" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <polygon points="0,0 10,5 0,10" fill="#6b7188"/>
+        </marker>
+        <marker id="s09ok" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <polygon points="0,0 10,5 0,10" fill="#16a34a"/>
+        </marker>
+        <marker id="s09bad" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <polygon points="0,0 10,5 0,10" fill="#dc2626"/>
+        </marker>
+        <marker id="s09teal" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+          <polygon points="0,0 10,5 0,10" fill="#0ea5a4"/>
+        </marker>
+      </defs>
+
+      <rect x="1" y="1" width="758" height="298" rx="10" fill="#ffffff" stroke="#e6e7f0" stroke-width="1"/>
+      <text x="380" y="28" text-anchor="middle" font-size="14" font-weight="700" fill="#0f1222">宿主只给提示，enclave 自己重判"是不是官方"</text>
+
+      <!-- 不可信宿主 -->
+      <rect x="18" y="118" width="150" height="74" rx="8" fill="#fff8ee" stroke="#d97706" stroke-width="1.8" stroke-dasharray="6 4"/>
+      <text x="93" y="146" text-anchor="middle" font-size="12.5" font-weight="700" fill="#b45309">宿主 / new-api</text>
+      <text x="93" y="166" text-anchor="middle" font-size="10" fill="#92400e">is_official=true（仅提示）</text>
+      <text x="93" y="182" text-anchor="middle" font-size="10" fill="#92400e">channelType</text>
+      <text x="93" y="212" text-anchor="middle" font-size="10" fill="#6b7188">只过 {model, token}</text>
+
+      <!-- 宿主 -> 判定 -->
+      <line x1="168" y1="150" x2="210" y2="118" stroke="#6b7188" stroke-width="1.8" marker-end="url(#s09mut)"/>
+
+      <!-- Enclave -->
+      <rect x="196" y="44" width="402" height="232" rx="12" fill="#eef0fe" stroke="#4f46e5" stroke-width="2"/>
+      <text x="397" y="68" text-anchor="middle" font-size="12.5" font-weight="700" fill="#4f46e5">SGX Enclave · 不信 hint，自主重判</text>
+
+      <!-- 判定框 -->
+      <rect x="214" y="88" width="176" height="64" rx="8" fill="#ffffff" stroke="#4f46e5" stroke-width="1.5"/>
+      <text x="302" y="112" text-anchor="middle" font-size="11.5" font-weight="700" fill="#312e81">命中官方 URL 表？</text>
+      <text x="302" y="132" text-anchor="middle" font-size="11.5" font-weight="700" fill="#312e81">且有 ProfileFor？</text>
+
+      <!-- YES 分支 -->
+      <line x1="390" y1="110" x2="428" y2="102" stroke="#16a34a" stroke-width="2" marker-end="url(#s09ok)"/>
+      <text x="410" y="92" text-anchor="middle" font-size="10" font-weight="700" fill="#15803d">是</text>
+      <rect x="430" y="78" width="150" height="64" rx="8" fill="#e7f6ec" stroke="#16a34a" stroke-width="1.8"/>
+      <text x="505" y="100" text-anchor="middle" font-size="11" font-weight="700" fill="#15803d">编译写死 host</text>
+      <text x="505" y="118" text-anchor="middle" font-size="10" fill="#146c2e">+ 该 provider 鉴权头</text>
+      <text x="505" y="134" text-anchor="middle" font-size="9.5" fill="#146c2e">凭据由 enclave 注入</text>
+
+      <!-- NO 分支 -->
+      <line x1="302" y1="152" x2="302" y2="194" stroke="#dc2626" stroke-width="2" marker-end="url(#s09bad)"/>
+      <text x="316" y="176" font-size="10" font-weight="700" fill="#b91c1c">否</text>
+      <rect x="214" y="196" width="176" height="60" rx="8" fill="#fdeaea" stroke="#dc2626" stroke-width="1.8"/>
+      <text x="302" y="220" text-anchor="middle" font-size="11" font-weight="700" fill="#b91c1c">拒绝 400</text>
+      <text x="302" y="240" text-anchor="middle" font-size="10" fill="#b91c1c">非可信官方上游</text>
+
+      <!-- 官方上游 -->
+      <rect x="618" y="100" width="126" height="70" rx="8" fill="#ffffff" stroke="#0ea5a4" stroke-width="1.8"/>
+      <text x="681" y="128" text-anchor="middle" font-size="12" font-weight="700" fill="#0ea5a4">官方上游</text>
+      <text x="681" y="148" text-anchor="middle" font-size="10" fill="#0f766e">strict-TLS</text>
+
+      <!-- YES -> 官方上游 -->
+      <line x1="580" y1="110" x2="616" y2="126" stroke="#0ea5a4" stroke-width="2" marker-end="url(#s09teal)"/>
+      <text x="606" y="100" text-anchor="middle" font-size="9.5" fill="#0f766e">官方 TLS</text>
+
+      <!-- 图例 -->
+      <text x="380" y="290" text-anchor="middle" font-size="9.5" fill="#6b7188">灰 = 宿主提示（仅参考） · 绿 = 判为官方并外呼 · 红 = 非官方即拒绝</text>
+    </svg>
+    <figcaption>裁决权在 enclave：宿主的 is_official 只是提示，enclave 用编译进的官方表重判——命中才用写死 host 外呼，否则拒绝。</figcaption>
+  </figure>
+</section>
