@@ -1,0 +1,157 @@
+<div class="step">
+  <h2>客户端验证器 <span class="mono-inline">verify_enclave.py</span> — 为什么它能"证明"（而不只是"检查"）</h2>
+
+  <p class="hint">
+    一个前端/后端工程师读这份脚本，第一眼会觉得它只是"用 Python 发个 HTTPS 请求、切几段字节、比几个哈希"——普通到不能再普通。真正的分量不在代码复杂度，而在于它把一个<b>信任问题</b>翻译成了<b>数学 + 硬件问题</b>：传统上你要"相信运营方不看、不存你的 prompt"；这份脚本把这份信任<b>整体搬走</b>，落到两样你不需要相信任何人就能独立核验的东西上——<b>密码学哈希</b>（指纹相等，SHA-256 / SHA-512）与 <b>Intel SGX 硬件签名</b>（CPU 出具、Intel 背书的 quote）。运营方即便是 root、即便控制整台宿主机与云平台，也无法在<b>不改变指纹</b>的前提下伪造这三件事。信任因此从"相信运营方"转移到"数学 + Intel 硬件"。
+  </p>
+
+  <h3>0 · 先立心智模型：不是"看服务器说了什么"，而是"逼硬件签字画押"</h3>
+  <div class="card" style="border:1px solid var(--line);border-radius:var(--radius,14px);padding:14px 16px;background:var(--card);margin:12px 0">
+    <p style="margin:0 0 6px">
+      整份脚本围绕一个对象——<b>quote（远程认证凭证）</b>：SGX CPU 生成的一段二进制，里面写死了两样关键字段，
+      <span style="color:var(--brand);font-weight:700">MRENCLAVE</span>（当前enclave里那份代码+配置的硬件度量指纹）与
+      <span style="color:var(--teal);font-weight:700">report_data</span>（enclave 自己塞进去的 64 字节，用来绑定它的 TLS 公钥）。
+    </p>
+    <p class="hint" style="margin:6px 0 0">
+      脚本要做的三步：① 把 quote 取回来并切出这两个字段；② 用 <b>MRENCLAVE</b> 回答"跑的是不是那份审计过、不落盘的代码"；③ 用 <b>report_data</b> 回答"被认证的 enclave 是不是此刻正和我通话的这个端点"。真正让 quote 无法伪造的 Intel 签名链，交给 DCAP（见最后一节）。
+    </p>
+  </div>
+
+  <h3>1 · <span class="mono-inline">unverified_ctx()</span> — 为什么<u>故意</u>关掉 CA / 主机名校验</h3>
+  <div class="card" style="border:1px solid var(--line);border-radius:var(--radius,14px);padding:14px 16px;background:var(--card);margin:12px 0">
+    <pre>def unverified_ctx():
+    # We deliberately do NOT verify the TLS chain against a CA: this is an
+    # RA-TLS self-signed certificate. Trust is established by the SGX QUOTE, not
+    # by PKI. (Same reason `curl -k` is correct here.)
+    ctx = ssl._create_unverified_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx</pre>
+    <p style="margin:10px 0 4px"><b>这段在干嘛：</b>造一个<b>关掉证书链校验、关掉主机名校验</b>（<span class="mono-inline">CERT_NONE</span>）的 TLS 上下文，等价于 <span class="mono-inline">curl -k</span>。后面所有连接都用它。</p>
+    <p style="margin:4px 0"><b>为什么这能"证明"（而不是自毁安全）：</b>普通 HTTPS 的信任根是 <b>CA/PKI</b>——某个证书颁发机构替证书背书。可这里 enclave 出示的是一张 <b>RA-TLS 自签名证书</b>，没有 CA 会签它；用 PKI 去验只会永远失败，而且<b>就算验过也证明不了任何关于 enclave 的事</b>。这里的信任根本不是 CA，而是 <b>SGX quote</b>。所以我们主动把 PKI 关掉，避免误把无关的信任源当成保障。</p>
+    <p class="hint" style="margin:4px 0 0">关键：关掉 CA 校验<b>没有</b>削弱安全，因为证书的真伪改由 <b>Check 3（通道绑定）</b>用硬件重新确立——把服务器实际出示的这张证书的公钥指纹，去和 quote 里硬件签过的 <span class="mono-inline">report_data</span> 对齐。类比前端：你不再相信地址栏那把"锁"图标，而是准备亲手对这把钥匙取指纹，再和一份硬件签名的声明比对。</p>
+  </div>
+
+  <h3>2 · <span class="mono-inline">fetch_attestation()</span> — 取回 quote，先判 <span class="mono-inline">attested</span></h3>
+  <div class="card" style="border:1px solid var(--line);border-radius:var(--radius,14px);padding:14px 16px;background:var(--card);margin:12px 0">
+    <pre>def fetch_attestation(host, port):
+    url = f"https://{host}:{port}/attestation"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=20, context=unverified_ctx()) as r:
+        body = r.read()
+    doc = json.loads(body)
+    if not doc.get("attested"):
+        raise RuntimeError(
+            "endpoint reports attested=false: it is NOT running inside an SGX "
+            "enclave (reason: %s)" % doc.get("reason", "unknown"))
+    quote = base64.b64decode(doc["quote_b64"])
+    report_data_hex = doc.get("report_data_hex", "")
+    return quote, report_data_hex</pre>
+    <p style="margin:10px 0 4px"><b>这段在干嘛：</b>对该端点的 <span class="mono-inline">/attestation</span> 发 GET，拿到 JSON；先检查 <span class="mono-inline">attested</span> 为真，再把 <span class="mono-inline">quote_b64</span> 从 base64 解成<b>原始二进制字节</b>（<span class="mono-inline">report_data_hex</span> 仅作参考展示）。</p>
+    <p style="margin:4px 0"><b>为什么这能证明：</b><span class="mono-inline">attested=false</span> 意味着这个进程<b>根本没在 enclave 里</b>（比如模拟模式或普通进程）——此时直接抛错中止，因为后续一切都建立在"存在真 quote"之上。这一步同时提供<b>活性（liveness）</b>：quote 是<b>此刻、从这个端点、经这条连接</b>实时取回的，不是一段陈年缓存，这对 Check 3 的通道绑定至关重要。</p>
+    <p class="hint" style="margin:4px 0 0">注意此刻 quote 仍只是"<b>声称</b>"——它的真伪（是否由 Intel 硬件真签过）尚未证明，那属于 DCAP。但我们已经拿到了需要解剖的字节。</p>
+  </div>
+
+  <h3>3 · <span class="mono-inline">parse_quote()</span> — 为什么偏移 <b>112</b>/<b>368</b>、长度 <b>32</b>/<b>64</b></h3>
+  <div class="card" style="border:1px solid var(--line);border-radius:var(--radius,14px);padding:14px 16px;background:var(--card);margin:12px 0">
+    <pre>QUOTE_HEADER_LEN = 48
+MRENCLAVE_OFFSET = QUOTE_HEADER_LEN + 64   # report body starts at 48; mr_enclave at +64
+MRENCLAVE_LEN = 32
+REPORTDATA_OFFSET = QUOTE_HEADER_LEN + 320  # report_data at +320 in the body
+REPORTDATA_LEN = 64
+
+def parse_quote(quote):
+    if len(quote) &lt; REPORTDATA_OFFSET + REPORTDATA_LEN:
+        raise RuntimeError("quote too short (%d bytes); malformed" % len(quote))
+    mrenclave = quote[MRENCLAVE_OFFSET:MRENCLAVE_OFFSET + MRENCLAVE_LEN]
+    report_data = quote[REPORTDATA_OFFSET:REPORTDATA_OFFSET + REPORTDATA_LEN]
+    return mrenclave, report_data</pre>
+    <p style="margin:10px 0 4px"><b>这段在干嘛：</b>quote 是一个<b>定长二进制结构体</b>。这里不引任何解析库，直接按写死的字节偏移切两段：<span class="mono-inline">MRENCLAVE = quote[112:144]</span>、<span class="mono-inline">report_data = quote[368:432]</span>；开头的长度校验挡掉被截断的畸形 quote。</p>
+    <p style="margin:4px 0"><b>为什么这些偏移是对的：</b>这些数字不是魔法常量，而是 <b>Intel SGX ABI</b> 规定的、little-endian、稳定且带版本的布局：</p>
+    <pre>SGX ECDSA Quote 字节布局 (little-endian)
++-----------------------------------------+----------+
+| Quote Header                            |   48 B   |  版本 / attestation key type / QE 信息
++-----------------------------------------+----------+
+| Report Body  (sgx_report_body_t, 384 B)            |
+|   +0    cpu_svn / misc_select / attributes ...     |
+|   +64   MR_ENCLAVE                      |   32 B   |  -> 绝对偏移 48 + 64  = 112
+|   +128  MR_SIGNER                       |   32 B   |
+|   +320  REPORT_DATA                     |   64 B   |  -> 绝对偏移 48 + 320 = 368
++-----------------------------------------+----------+
+| Signature (ECDSA-P256) + QE Cert Chain             |  <- DCAP 用它验 Intel 签名链
++----------------------------------------------------+</pre>
+    <p class="hint" style="margin:4px 0 0">Report Body 紧跟在 48 字节头之后，所以 body 内偏移 +64 的 <b>mr_enclave</b> 绝对偏移是 48+64=<b>112</b>，body 内 +320 的 <b>report_data</b> 是 48+320=<b>368</b>；长度 <b>32</b>/<b>64</b> 就是结构体里这两个字段的固定大小。因为布局是 Intel 定义的定长 ABI，裸切字节就够用，无需解析器。（尾部的 Signature + QE 证书链正是 DCAP 要验的部分，本脚本不碰。）</p>
+  </div>
+
+  <h3>4 · Check 2 — MRENCLAVE 比对：为什么"指纹相等 = 跑的就是那份不落盘代码"</h3>
+  <div class="card" style="border:1px solid var(--line);border-radius:var(--radius,14px);padding:14px 16px;background:var(--card);margin:12px 0">
+    <pre>    got_mre = mrenclave.hex()
+    if got_mre != want_mre:
+        print(f"{RED}✗ Check 2 FAILED — MRENCLAVE MISMATCH{RESET}")
+        print(f"    running : {got_mre}")
+        print(f"    expected: {want_mre}")
+        print(f"    → the enclave is NOT the audited build you pinned. Do not trust it.")
+        sys.exit(1)
+    print(f"{GREEN}✓ Check 2{RESET} MRENCLAVE matches the pinned value")</pre>
+    <p style="margin:10px 0 4px"><b>这段在干嘛：</b>把切出来的 MRENCLAVE 转成十六进制，和 <span class="mono-inline">want_mre</span>（你用 <span class="mono-inline">--mrenclave</span> 传入、来自<b>签名发布版</b>或<b>你自己可复现重建</b>的值）逐字符比。不等就退出 1，直白地写"不要信任它"。</p>
+    <p style="margin:4px 0"><b>为什么这能证明：</b>MRENCLAVE 是 CPU 在加载 enclave 时，对其<b>初始代码页 + 数据页 + 配置</b>算出的度量哈希（measurement，硬件强制、软件伪造不了，类比 Docker 镜像 digest / git commit，但你改不了它）。指纹相等之所以有意义，靠两个前提叠加：</p>
+    <div class="card" style="border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--bg);margin:8px 0">
+      <p class="hint" style="margin:0 0 4px"><b>前提① 可复现构建（reproducible build）：</b>enclave 里的代码是<b>开源</b>的，任何人重新编译都得到<b>同一个</b> MRENCLAVE。于是 <span class="mono-inline">want_mre</span> 你能<b>独立算出</b>，不必向运营方索取。</p>
+      <p class="hint" style="margin:0"><b>前提② 审计：</b>读这份源码可确认它<b>没有任何把正文写盘/入库/记日志的代码路径</b>，且只连编译期写死的官方上游 URL。</p>
+    </div>
+    <p style="margin:4px 0 0">于是：<span class="mono-inline">MRENCLAVE(运行中) == MRENCLAVE(你审计过的构建)</span> ⇒ 由传递性，<b>此刻在 enclave 里执行的字节，就是那份审计过的构建</b>。运营方哪怕只改 1 个字节去偷偷加日志，度量立即改变，这项检查当场变红。"不落盘"由此从<b>口头承诺</b>变成<b>可验证</b>。</p>
+  </div>
+
+  <h3>5 · <span class="mono-inline">get_peer_cert_der</span> + <span class="mono-inline">spki_sha512</span> + Check 3 — 通道绑定为什么能防转发/中间人</h3>
+  <div class="card" style="border:1px solid var(--line);border-radius:var(--radius,14px);padding:14px 16px;background:var(--card);margin:12px 0">
+    <pre>def get_peer_cert_der(host, port):
+    ctx = unverified_ctx()
+    with ssl.create_connection((host, int(port)), timeout=20) as sock:
+        with ctx.wrap_socket(sock, server_hostname=host) as ssock:
+            return ssock.getpeercert(binary_form=True)
+
+
+def spki_sha512(cert_der):
+    """SHA-512 of the certificate's SubjectPublicKeyInfo (matches how the
+    enclave binds its TLS key into the quote). Needs the `cryptography` pkg."""
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.primitives import serialization
+    except ImportError:
+        return None
+    cert = x509.load_der_x509_certificate(cert_der)
+    spki = cert.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return hashlib.sha512(spki).digest()</pre>
+    <pre>    binding_ok = (want_rd == report_data)
+    if not binding_ok:
+        print(f"{RED}✗ Check 3 FAILED — report_data does not match the TLS key{RESET}")
+        print(f"    → possible relay/MITM: this quote may belong to a different enclave.")
+        sys.exit(1)</pre>
+    <p style="margin:10px 0 4px"><b>这段在干嘛：</b>再开一条到<b>同一个 host:port</b> 的 TLS，用 <span class="mono-inline">getpeercert(binary_form=True)</span> 抓下服务器<b>实际出示</b>的证书（DER）。<span class="mono-inline">spki_sha512</span> 取出证书里的 <b>SubjectPublicKeyInfo（SPKI，公钥结构）</b>并做 SHA-512。Check 3 要求：<span class="mono-inline">SHA-512(服务器 SPKI) == report_data</span>（就是我们从 quote 里切出的那 64 字节）。</p>
+    <p style="margin:4px 0"><b>为什么这能防转发/中间人：</b>光有 Check 2，只证明了"世界上某处存在一台跑着正确代码的真 enclave"——恶意运营方完全可以从<b>别处</b>一台诚实 enclave 抓一份真 quote 回放给你，同时用一台<b>普通的、能偷看的代理</b>来终结你的 TLS。通道绑定堵死这条路：</p>
+    <p style="margin:4px 0">enclave 在<b>内部</b>生成 TLS 密钥对时，就把 <span class="mono-inline">SHA-512(自己的 SPKI)</span> 写进了 <span class="mono-inline">report_data</span>，而 <span class="mono-inline">report_data</span> 是 CPU <b>签进 quote 的一部分</b>。于是 quote 以<b>硬件签名</b>的形式声明："持有<b>这把公钥</b>的 enclave，正是跑这段代码的 enclave。"如果你此刻通话的端点出示的证书，其 SPKI 哈希<b>正好等于</b>这个值，那么<b>终结你 TLS 的私钥就活在被认证的 enclave 内部</b>——任何中间代理都<b>拿不到</b>那把私钥（enclave 私钥无法导出）。不等 ⇒ 有人在转发一份属于<b>别的 key / 别的 enclave</b> 的 quote ⇒ relay/MITM ⇒ 中止。</p>
+    <p class="hint" style="margin:4px 0 0">绑的是 <b>SPKI（只含公钥身份）</b>，不是整张证书——所以有效期、序列号等外观字段变了都无所谓，被硬件锁定的<b>只是"钥匙身份"</b>。缺 <span class="mono-inline">cryptography</span> 库时该函数返回 <span class="mono-inline">None</span>，Check 3 被跳过并明确提示——此时结论强度下降，务必装库补上。</p>
+  </div>
+
+  <h3>6 · 诚实边界：这份脚本<u>没</u>做什么，以及为什么"必须真的验"</h3>
+  <div class="card" style="border:1px solid var(--warn);border-radius:var(--radius,14px);padding:14px 16px;background:var(--card);margin:12px 0">
+    <pre>    ./relay-verify -addr &lt;host:port&gt; -mrenclave &lt;hex&gt; -dcap-verify</pre>
+    <p style="margin:10px 0 4px">脚本自己把结论标成 <b style="color:var(--warn)">PARTIAL PASS</b>，并明写"The quote's Intel signature chain was NOT verified by this script."——这是刻意的诚实。它的边界：</p>
+    <div class="card" style="border:1px solid var(--line);border-radius:12px;padding:10px 14px;background:var(--bg);margin:8px 0">
+      <p style="margin:0 0 6px"><b style="color:var(--bad)">① 没验 Intel 签名链（最关键）。</b>纯 Python 只切字节、比哈希，从<b>没</b>校验 quote 的 ECDSA 签名是否上溯到 Intel 背书的认证密钥。一份<b>整体伪造</b>的 quote（攻击者自己编字节，凑出对的 MRENCLAVE、以及匹配他自己 key 的 report_data）会<b>骗过 Check 1–3</b>。真正让伪造不可能的是 <b>DCAP</b>：<span class="mono-inline">libsgx_dcap_quoteverify</span> 会验 quote 签名 → QE 证书链 → <b>Intel SGX Root CA</b>，并核对 TCB / QE identity（吊销状态、微码是否最新）。所以必须再跑：<span class="mono-inline">relay-verify -dcap-verify</span>。</p>
+      <p style="margin:0 0 6px"><b style="color:var(--warn)">② MRENCLAVE 的意义 = 你 pin 的值背后的可复现构建 + 审计。</b>若 <span class="mono-inline">want_mre</span> 是运营方随口给的、或构建其实不可复现，Check 2 就什么都证明不了。这个 pin <b>必须你独立推导</b>。</p>
+      <p style="margin:0 0 6px"><b style="color:var(--warn)">③ SGX 并非万能。</b>侧信道 / 微架构攻击、TCB / 微码过期属于另一层风险面；DCAP 的 TCB 状态检查能缓解"平台过时"这一类，但历史上确有 SGX 侧信道研究，别把它当绝对黑箱。</p>
+      <p style="margin:0"><b style="color:var(--warn)">④ 必须真的运行验证。</b>把脚本当摆设、无视红色结果、或"验证通过后又偷偷换端点"，保证都会失效。结论只对<b>验证当刻、这条通道、这个 quote</b> 成立。</p>
+    </div>
+  </div>
+
+  <h3>所以：无需信任运营方，只需信任数学 + Intel 硬件</h3>
+  <div class="card" style="border:1px solid var(--ok);border-radius:var(--radius,14px);padding:14px 16px;background:var(--card);margin:12px 0">
+    <p style="margin:0">
+      这四件事是一条<b>缺一环就不成立</b>的链：<b style="color:var(--brand)">quote 经 DCAP 验真</b>（Intel 硬件确实签过它、没被伪造）+ <b style="color:var(--brand)">MRENCLAVE 与你独立重建的指纹匹配</b>（跑的确是那份开源、审计过、不落盘、只连官方 URL 的代码）+ <b style="color:var(--teal)">report_data == SHA-512(服务器 SPKI) 的通道绑定</b>（被认证的 enclave 就是此刻和你通话的端点，没有中间人转发）+ <b>你真的把这三项验了</b>。四环齐备时，"运营方会不会偷看 / 记录你的 prompt"这个问题<b>不再靠信任来回答</b>——它在<b>密码学与 Intel 硬件层面被否定</b>：运营方想作恶就必须改代码，一改指纹立刻变，你的验证<b style="color:var(--bad)">当场变红</b>。于是你<b>无需信任运营方</b>，只需信任公开可复现的密码学，以及你手里这份自己能读懂的验证器。
+    </p>
+  </div>
+</div>

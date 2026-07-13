@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>可视化演示 · 一次 AI 请求经历了什么 & 怎么验证</title>
+<title>机密计算 AI 网关 · 代码导读 · 验证 · 可视化</title>
 <style>
   :root{
     --ink:#0f1222;--ink2:#3a3f5c;--muted:#6b7188;--bg:#f5f6fb;--card:#fff;--line:#e6e7f0;
@@ -11,123 +11,145 @@
     --code:#0b1020;--codeink:#d6e2ff;--radius:14px;
   }
   *{box-sizing:border-box}
-  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",Roboto,Arial,sans-serif;
-       color:var(--ink);background:var(--bg);line-height:1.6}
-  .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+  html{scroll-behavior:smooth}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",Roboto,Arial,sans-serif;color:var(--ink);background:var(--bg);line-height:1.6}
+  .wrap{max-width:1180px;margin:0 auto;padding:0 20px}
   code,pre,.mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
-  header{background:linear-gradient(120deg,#1a1c40,#0e1030);color:#fff;padding:34px 0 28px}
-  h1{margin:0 0 6px;font-size:26px;font-weight:800}
-  header p{margin:0;color:#c4c8ef;font-size:15px}
-  .step{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin:22px 0;box-shadow:0 1px 2px rgba(16,18,34,.04)}
-  .step h2{margin:0 0 4px;font-size:20px}
-  .step h2 .n{color:var(--brand);margin-right:8px}
+  a{color:var(--brand)}
+  header.top{background:linear-gradient(120deg,#1a1c40,#0e1030);color:#fff;padding:26px 0 0;position:sticky;top:0;z-index:20}
+  header.top h1{margin:0 0 4px;font-size:22px;font-weight:800}
+  header.top p{margin:0 0 14px;color:#c4c8ef;font-size:14px}
+  .nav{display:flex;gap:4px;flex-wrap:wrap}
+  .nav a{color:#c9cdf5;text-decoration:none;font-size:14px;font-weight:600;padding:9px 14px;border-radius:10px 10px 0 0}
+  .nav a:hover{background:rgba(255,255,255,.08);color:#fff}
+  .nav a.wp{margin-left:auto;background:#fff;color:#15173a;border-radius:10px;margin-bottom:6px}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin:22px 0;box-shadow:0 1px 2px rgba(16,18,34,.04);scroll-margin-top:120px}
+  .step h2{margin:0 0 4px;font-size:20px}.step h2 .n{color:var(--brand);margin-right:8px}
   .step .hint{color:var(--muted);font-size:14px;margin:0 0 16px}
+  h3{font-size:16px;margin:18px 0 8px}
   .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
   label{font-size:13px;color:var(--muted);display:block;margin:0 0 4px}
   input,textarea,select{font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);width:100%}
   textarea{min-height:52px;resize:vertical}
   .btn{background:var(--brand);color:#fff;border:0;border-radius:10px;padding:10px 18px;font-weight:700;cursor:pointer;font-size:15px}
-  .btn:disabled{opacity:.5;cursor:not-allowed}
-  .btn.sec{background:#eef0fe;color:var(--brand)}
-  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .btn:disabled{opacity:.5;cursor:not-allowed}.btn.sec{background:#eef0fe;color:var(--brand)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}@media(max-width:720px){.grid2{grid-template-columns:1fr}}
   .muted{color:var(--muted);font-size:13px}
   .mono-inline{background:#eef0f7;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12.5px;word-break:break-all}
-
+  .card{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fafbff}
+  /* explainer */
+  .concepts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}@media(max-width:720px){.concepts{grid-template-columns:1fr}}
+  .ccard{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fafbff}
+  .ccard .ic{font-size:22px}.ccard b.t{display:block;margin:6px 0 4px;font-size:15px}
+  .ccard .desc{font-size:13.5px;color:var(--ink2)}.ccard .an{font-size:12.5px;color:var(--muted);margin-top:9px;border-top:1px dashed var(--line);padding-top:8px}.ccard .an b{color:var(--teal)}
+  .why{margin-top:16px;background:#eef6ff;border:1px solid #d6e6fb;border-radius:12px;padding:14px 16px;font-size:14px;color:#1b4f80}
+  .steps3{margin:10px 0 0;padding-left:20px}.steps3 li{margin:6px 0;color:var(--ink2);font-size:13.5px}
+  /* code reader */
+  .code-wrap{display:grid;grid-template-columns:290px 1fr;gap:14px;margin-top:14px}
+  @media(max-width:860px){.code-wrap{grid-template-columns:1fr}}
+  .code-side{display:flex;flex-direction:column;gap:14px;max-height:640px;overflow:auto}
+  .side-box{border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .side-box .hd{background:#f6f7fb;padding:9px 12px;font-weight:700;font-size:13px;border-bottom:1px solid var(--line)}
+  .tree-item{padding:8px 12px;font-size:13px;cursor:pointer;border-bottom:1px solid #f1f2f7;display:flex;flex-direction:column}
+  .tree-item:hover{background:#f6f7ff}.tree-item.active{background:#eef0fe}
+  .tree-item .fp{font-family:"SF Mono",monospace;font-size:11.5px;color:var(--muted)}
+  .chain-step{padding:9px 12px;font-size:12.8px;cursor:pointer;border-bottom:1px solid #f1f2f7;display:flex;gap:8px;align-items:flex-start}
+  .chain-step:hover{background:#f6f7ff}.chain-step.active{background:#eef0fe}
+  .bdot{width:10px;height:10px;border-radius:50%;flex:0 0 10px;margin-top:4px}
+  .b-client-enclave{background:var(--ok)}.b-enclave-upstream{background:var(--teal)}
+  .b-enclave-host{background:var(--bad)}.b-internal{background:#a3a8bf}
+  .chain-step .st{font-size:11px;color:var(--muted);font-family:monospace}
+  #monaco{height:520px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .expl{border:1px solid var(--line);border-radius:12px;margin-top:12px;overflow:hidden}
+  .expl .hd{padding:10px 14px;font-weight:700;font-size:14px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .expl .bd{padding:10px 14px;font-size:13.5px;color:var(--ink2)}
+  .tag{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px}
+  .tag.sec{background:#e7f6ec;color:#146c2e}.tag.ins{background:#fdeaea;color:#a11}.tag.int{background:#eef0f7;color:#555}
   /* checks */
   .check{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:12px;margin:10px 0;background:#fafbff}
   .dot{width:26px;height:26px;border-radius:50%;flex:0 0 26px;display:grid;place-items:center;font-weight:800;color:#fff;background:#c3c7d6}
   .dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}.dot.run{background:var(--brand);animation:pulse 1s infinite}
   @keyframes pulse{50%{opacity:.5}}
   .check b{font-size:15px}.check .d{font-size:13.5px;color:var(--ink2)}.check .p{font-size:13px;color:var(--muted);margin-top:2px}
-
-  /* flow diagram */
-  .flow{display:flex;align-items:stretch;gap:0;margin:6px 0 4px;overflow-x:auto;padding-bottom:6px}
+  /* flow */
+  .flow{display:flex;align-items:stretch;margin:6px 0 4px;overflow-x:auto;padding-bottom:6px}
   .node{flex:1;min-width:150px;border:1.5px solid var(--line);border-radius:12px;padding:12px;text-align:center;background:#fff;transition:.25s}
-  .node.untrusted{border-style:dashed}
-  .node.active{border-color:var(--brand);box-shadow:0 0 0 4px #e5e7ff;transform:translateY(-2px)}
+  .node.untrusted{border-style:dashed}.node.active{border-color:var(--brand);box-shadow:0 0 0 4px #e5e7ff;transform:translateY(-2px)}
   .node b{display:block;font-size:14px}.node span{font-size:11.5px;color:var(--muted)}
   .edge{flex:0 0 34px;display:grid;place-items:center;color:#c3c7d6;font-size:20px;font-weight:800}
-  .edge.active{color:var(--brand)}
-  .edge.active.insecure{color:var(--bad)}
-
-  /* boundary panel */
+  .edge.active{color:var(--brand)}.edge.active.insecure{color:var(--bad)}
+  .boundary-key{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:10px 0 2px}
+  .boundary-key span{display:inline-flex;align-items:center;gap:6px}.sw{width:26px;border-top:2px solid var(--ok)}.sw.d{border-top:2px dashed var(--bad)}
   .panel{border:1px solid var(--line);border-radius:12px;margin-top:14px;overflow:hidden}
   .panel .head{padding:10px 14px;font-weight:700;font-size:14px;display:flex;justify-content:space-between;align-items:center}
-  .panel.secure .head{background:#eafaf0;color:#12602c}
-  .panel.insecure .head{background:#fdeeee;color:#9a1616}
+  .panel.secure .head{background:#eafaf0;color:#12602c}.panel.insecure .head{background:#fdeeee;color:#9a1616}
   .panel .lock{font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px}
-  .panel.secure .lock{background:#cdeed8;color:#12602c}
-  .panel.insecure .lock{background:#f6d2d2;color:#9a1616}
-  .panel .note{padding:10px 14px;font-size:13.5px;color:var(--ink2);border-bottom:1px solid var(--line)}
-  .panel .note.key{background:#fff7ed;color:#8a4b08;font-weight:600}
-  pre{background:var(--code);color:var(--codeink);margin:0;padding:12px 14px;overflow:auto;font-size:12.5px;max-height:260px}
+  .panel.secure .lock{background:#cdeed8;color:#12602c}.panel.insecure .lock{background:#f6d2d2;color:#9a1616}
+  .panel .note{padding:10px 14px;font-size:13.5px;color:var(--ink2);border-bottom:1px solid var(--line)}.panel .note.key{background:#fff7ed;color:#8a4b08;font-weight:600}
+  pre{background:var(--code);color:var(--codeink);margin:0;padding:12px 14px;overflow:auto;font-size:12.5px;max-height:280px}
   .stepbar{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
-  .pchip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer;background:#fff;color:var(--muted)}
-  .pchip.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+  .pchip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer;background:#fff;color:var(--muted)}.pchip.on{background:var(--brand);color:#fff;border-color:var(--brand)}
   .ctrls{display:flex;gap:8px;margin-top:12px;align-items:center}
-  /* explainer */
-  .intro h3{margin:20px 0 10px;font-size:16px}
-  .concepts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-  @media(max-width:720px){.concepts{grid-template-columns:1fr}}
-  .ccard{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fafbff}
-  .ccard .ic{font-size:22px}
-  .ccard b.t{display:block;margin:6px 0 4px;font-size:15px}
-  .ccard .desc{font-size:13.5px;color:var(--ink2)}
-  .ccard .an{font-size:12.5px;color:var(--muted);margin-top:9px;border-top:1px dashed var(--line);padding-top:8px}
-  .ccard .an b{color:var(--teal)}
-  .why{margin-top:16px;background:#eef6ff;border:1px solid #d6e6fb;border-radius:12px;padding:14px 16px;font-size:14px;color:#1b4f80;line-height:1.7}
-  .why b{color:#0d3a63}
-  .steps3{margin:10px 0 0;padding-left:20px}.steps3 li{margin:6px 0;color:var(--ink2);font-size:13.5px}
-  .boundary-key{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:10px 0 2px}
-  .boundary-key span{display:inline-flex;align-items:center;gap:6px}
-  .sw{width:26px;height:0;border-top:2px solid var(--ok)}
-  .sw.d{border-top:2px dashed var(--bad)}
 </style>
 </head>
 <body>
-<header><div class="wrap">
-  <h1>一次 AI 请求经历了什么 · 怎么验证它没偷看你</h1>
-  <p>连的是真实运行在 Intel SGX 上的 enclave。两个按钮，看懂：① 怎么验证这台是真 enclave；② 你的 prompt 在每一跳到底去了哪。</p>
+<header class="top"><div class="wrap">
+  <h1>机密计算 AI 网关 · 可读、可验、可视</h1>
+  <p>真实运行在 Intel SGX 上的 enclave。读它的代码、验证它的身份、看你的 prompt 每一跳去了哪。</p>
+  <nav class="nav">
+    <a href="#overview">概览</a>
+    <a href="#code">代码导读</a>
+    <a href="#verify">验证</a>
+    <a href="#flow">请求可视化</a>
+    <a href="#verifier">验证器详解</a>
+    <a class="wp" href="/whitepaper" target="_blank">📖 技术白皮书</a>
+  </nav>
 </div></header>
 
 <div class="wrap">
 
-  <!-- explainer -->
-  <div class="step intro">
+  <!-- overview / explainer -->
+  <div class="step" id="overview">
     <h2>读我先 · 3 分钟搞懂这在干嘛</h2>
-    <p class="hint" style="font-size:14.5px">你把 prompt（可能含敏感数据）发给 AI 网关时，正常情况下运营方<b>能看见、能记录</b>你发的每一个字——你只能选择"相信"他们不这么做。这个演示把"相信"换成"<b>可验证</b>"：用硬件 + 密码学证明服务器<b>看不到也存不下</b>你的数据，并让你亲眼看到数据每一跳去了哪。</p>
-
+    <p class="hint" style="font-size:14.5px">你把 prompt（可能含敏感数据）发给 AI 网关时，正常情况下运营方<b>能看见、能记录</b>你发的每个字——你只能"相信"他们不这么做。这个站把"相信"换成"<b>可验证</b>"：用硬件 + 密码学证明服务器<b>看不到也存不下</b>你的数据，并让你亲眼读代码、看数据每一跳去了哪。</p>
     <h3>先认识 3 个词（用你熟悉的东西类比）</h3>
     <div class="concepts">
-      <div class="ccard">
-        <div class="ic">🔒</div>
-        <b class="t">Enclave（机密飞地）</b>
-        <div class="desc">CPU 里一块<b>硬件加密的隔离区</b>。程序在里面跑，它的内存连服务器的 root 管理员、连云厂商都看不到明文。</div>
-        <div class="an">类比：一个<b>连房东都打不开</b>的保险箱，你的程序在保险箱里运行。</div>
-      </div>
-      <div class="ccard">
-        <div class="ic">📜</div>
-        <b class="t">Quote（远程认证凭证）</b>
-        <div class="desc">CPU 出具的、带 <b>Intel 签名</b>的一句话：“我这块真芯片，此刻正在跑<b>这段确切的代码</b>”。</div>
-        <div class="an">类比：像 <b>HTTPS 证书</b>，但由 CPU 硬件 + Intel 背书，运营方<b>伪造不了</b>。</div>
-      </div>
-      <div class="ccard">
-        <div class="ic">🧬</div>
-        <b class="t">MRENCLAVE（代码指纹）</b>
-        <div class="desc">那段代码 + 配置的<b>哈希值</b>。改动一个字节，指纹就完全不同。</div>
-        <div class="an">类比：<b>Docker 镜像 digest</b> / <b>git commit 号</b> / 前端的 <b>SRI</b>。</div>
-      </div>
+      <div class="ccard"><div class="ic">🔒</div><b class="t">Enclave（机密飞地）</b><div class="desc">CPU 里一块<b>硬件加密的隔离区</b>，里面内存连服务器 root、连云厂商都看不到明文。</div><div class="an">类比：一个<b>连房东都打不开</b>的保险箱，程序在里面跑。</div></div>
+      <div class="ccard"><div class="ic">📜</div><b class="t">Quote（远程认证凭证）</b><div class="desc">CPU 出具、带 <b>Intel 签名</b>的一句话：“我这块真芯片，此刻正在跑<b>这段确切代码</b>”。</div><div class="an">类比：像 <b>HTTPS 证书</b>，但 CPU+Intel 背书，<b>伪造不了</b>。</div></div>
+      <div class="ccard"><div class="ic">🧬</div><b class="t">MRENCLAVE（代码指纹）</b><div class="desc">那段代码+配置的<b>哈希</b>，改一字节就全变。</div><div class="an">类比：<b>Docker digest</b> / <b>git commit 号</b> / 前端 <b>SRI</b>。</div></div>
     </div>
-
-    <div class="why">
-      <b>那"它没偷看你"到底是怎么被证明的？</b> 一条链子，缺一环就不成立：
+    <div class="why"><b>“它没偷看你”怎么被证明？</b> 一条链子，缺一环就不成立：
       <ol class="steps3">
-        <li>跑在 enclave 里的代码是<b>开源</b>的，任何人可读、可<b>重新编译</b>得到同一个指纹（MRENCLAVE）。</li>
-        <li>审计这份代码 ⇒ 确认它<b>根本没有把正文写盘/入库/记日志的代码</b>，且只连官方上游。</li>
-        <li>Quote 由 Intel 硬件签名，<b>证明服务器上跑的就是这份代码</b>（指纹对得上）。</li>
-        <li>⇒ 传递性地证明：这台服务器<b>做不到</b>偷看/留存你的 prompt——运营方想作恶就得改代码，一改指纹就变，你下面的"开始验证"当场会红。</li>
+        <li>enclave 里的代码<b>开源</b>、可<b>重新编译</b>得到同一指纹（下面"代码导读"就能逐行读）。</li>
+        <li>审计代码 ⇒ 确认它<b>没有把正文写盘/入库/记日志的代码</b>，且只连官方上游。</li>
+        <li>Quote 由 Intel 签名，<b>证明服务器跑的就是这份代码</b>（指纹对得上）。</li>
+        <li>⇒ 传递性证明它<b>做不到</b>偷看；改代码就变指纹，下面"验证"会当场红。</li>
       </ol>
+    </div>
+  </div>
+
+  <!-- code reader (web VSCode) -->
+  <div class="step" id="code">
+    <h2>📂 代码导读（网页版 VSCode）</h2>
+    <p class="hint">左侧是构成 enclave 的<b>全部源码</b>（只读）。点<b>「endpoint 链路」</b>里的步骤，编辑器会跳到对应文件的确切行并讲解——完整看清一条请求进入 enclave 后经历了什么。</p>
+    <div class="code-wrap">
+      <div class="code-side">
+        <div class="side-box">
+          <div class="hd">🧭 endpoint 请求链路（点步骤逐行看）</div>
+          <div id="chainList"></div>
+        </div>
+        <div class="side-box">
+          <div class="hd">📁 enclave 源码文件</div>
+          <div id="fileTree"></div>
+        </div>
+      </div>
+      <div>
+        <div id="monaco"></div>
+        <div class="expl" id="codeExpl" style="display:none">
+          <div class="hd"><span id="exTitle"></span><span id="exTag" class="tag"></span></div>
+          <div class="bd"><div id="exBody"></div><div class="muted" id="exData" style="margin-top:8px"></div></div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -135,159 +157,147 @@
   <div class="step">
     <div class="grid2">
       <div><label>enclave 端点</label><input id="endpoint" readonly></div>
-      <div><label>期望 MRENCLAVE（代码指纹，你 pin 的值）</label><input id="mre" readonly></div>
+      <div><label>期望 MRENCLAVE（代码指纹）</label><input id="mre" readonly></div>
     </div>
     <div class="grid2" style="margin-top:10px">
-      <div><label>网关 token（粘贴你的，或在服务器端设 RELAY_DEMO_TOKEN）</label><input id="token" placeholder="例如 9wFTZQEJ..."></div>
-      <div><label>模型</label><input id="model" value="gpt-4o-mini"></div>
+      <div><label>网关 token（粘贴，或服务器端设 RELAY_DEMO_TOKEN）</label><input id="token" placeholder="例如 9wFTZQEJ..."></div>
+      <div><label>模型（默认 DeepSeek via OpenRouter，可换 gpt-4o-mini 等）</label><input id="model" value="deepseek/deepseek-chat"></div>
     </div>
   </div>
 
-  <!-- step 1: verify -->
-  <div class="step">
+  <!-- verify -->
+  <div class="step" id="verify">
     <h2><span class="n">①</span>先验证：这台是不是真 enclave？</h2>
     <p class="hint">发任何 prompt 之前，客户端先做三项检查——把"相信运营方"换成"相信 Intel 硬件签名 + 你能自己重建的代码指纹"。</p>
     <button class="btn" id="btnVerify">开始验证</button>
     <div id="checks" style="margin-top:14px"></div>
   </div>
 
-  <!-- step 2: visualize a request -->
-  <div class="step">
+  <!-- visualize -->
+  <div class="step" id="flow">
     <h2><span class="n">②</span>看一次请求经历了什么</h2>
-    <p class="hint">下面 4 个方框是数据流经的 4 个角色。<b>实线框 = 可信</b>（enclave / 官方上游 / 你自己）；<b>虚线框 = 不可信</b>（new-api 主体、宿主、云厂商）。整套设计的核心就是：<b>让你的 prompt 永远不跨过虚线框</b>。点"发送并可视化"，逐跳看每条边界上到底流过了什么数据——<b>重点看第 2 跳</b>（发给不可信 new-api 的那一跳里，有没有你的 prompt）。</p>
+    <p class="hint">下面 4 个方框是数据流经的 4 个角色。<b>实线框=可信</b>（enclave/官方上游/你），<b>虚线框=不可信</b>（new-api 主体/宿主/云厂商）。核心：<b>prompt 永不跨过虚线框</b>。点"发送并可视化"，逐跳看每条边界流过了什么——<b>重点看第 2 跳</b>。</p>
     <label>你的 prompt</label>
     <textarea id="prompt">你好，用一句话介绍你自己</textarea>
-    <div class="row" style="margin-top:10px">
-      <button class="btn" id="btnChat">发送并可视化</button>
-      <span class="muted" id="chatStatus"></span>
-    </div>
-
-    <!-- flow diagram -->
-    <div class="flow" id="flow" style="margin-top:18px">
+    <div class="row" style="margin-top:10px"><button class="btn" id="btnChat">发送并可视化</button><span class="muted" id="chatStatus"></span></div>
+    <div class="flow" id="flowd" style="margin-top:18px">
       <div class="node" data-node="你 (客户端)"><b>你 (客户端)</b><span>发 prompt</span></div>
       <div class="edge" data-edge="0">▶</div>
-      <div class="node" data-node="SGX Enclave"><b>SGX Enclave</b><span>加密内存 · 不落盘</span></div>
+      <div class="node" data-node="SGX Enclave"><b>SGX Enclave</b><span>加密内存·不落盘</span></div>
       <div class="edge" data-edge="1">▶</div>
-      <div class="node untrusted" data-node="new-api 控制面 (不可信)"><b>new-api 控制面</b><span>不可信 · 只见元数据</span></div>
+      <div class="node untrusted" data-node="new-api 控制面 (不可信)"><b>new-api 控制面</b><span>不可信·只见元数据</span></div>
       <div class="edge" data-edge="2">▶</div>
-      <div class="node" data-node="OpenAI 官方"><b>OpenAI 官方</b><span>api.openai.com</span></div>
+      <div class="node" data-node="OpenAI 官方"><b>官方上游</b><span>OpenAI/OpenRouter/…</span></div>
     </div>
-    <div class="boundary-key">
-      <span><i class="sw"></i> 绿色边 = 加密 / 可信通道</span>
-      <span><i class="sw d"></i> 红色虚线边 = 跨越"不可信"边界（这里只应有元数据，绝无 prompt）</span>
-    </div>
-
+    <div class="boundary-key"><span><i class="sw"></i> 绿色边=加密/可信通道</span><span><i class="sw d"></i> 红色虚线边=跨越不可信边界（只应有元数据）</span></div>
     <div class="stepbar" id="stepbar"></div>
     <div id="panel"></div>
-    <div class="ctrls" id="ctrls" style="display:none">
-      <button class="btn sec" id="prev">← 上一步</button>
-      <button class="btn sec" id="next">下一步 →</button>
-      <button class="btn sec" id="auto">▶ 自动播放</button>
-    </div>
+    <div class="ctrls" id="ctrls" style="display:none"><button class="btn sec" id="prev">← 上一步</button><button class="btn sec" id="next">下一步 →</button><button class="btn sec" id="auto">▶ 自动播放</button></div>
   </div>
 
-  <p class="muted" style="margin:20px 0 40px">
-    说明：本页做的是"度量比对 + 通道绑定 + 真实转发"。完整杜绝伪造 quote 还需 DCAP 签名链验证
-    <span class="mono-inline">relay-verify -dcap-verify</span>。403 = 香港地域封锁（=到达真官方 OpenAI）。
-  </p>
+  <!-- verifier explainer (footer, fetched) -->
+  <div id="verifier"></div>
+
+  <p class="muted" style="margin:20px 0 46px">完整杜绝伪造 quote 还需 DCAP 签名链验证 <span class="mono-inline">relay-verify -dcap-verify</span>。403=地域封锁（=到达真官方上游）。</p>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
 <script>
-// ---------- helpers ----------
-const $ = s => document.querySelector(s);
-const j = o => JSON.stringify(o, null, 2);
-async function api(path, opts){ const r = await fetch(path, opts); return r.json(); }
+const $=s=>document.querySelector(s), j=o=>JSON.stringify(o,null,2);
+async function api(p,o){const r=await fetch(p,o);return r.json();}
 
-let TRACE = [], cur = 0, timer = null;
+// ---------- config ----------
+(async()=>{const c=await api('/api/config');$('#endpoint').value=c.endpoint;$('#mre').value=c.expected_mrenclave;
+  if(c.default_model)$('#model').value=c.default_model;
+  if(c.has_default_token)$('#token').placeholder='服务器已配置默认 token（可留空）';})();
 
-// ---------- load config ----------
-(async () => {
-  const c = await api('/api/config');
-  $('#endpoint').value = c.endpoint;
-  $('#mre').value = c.expected_mrenclave;
-  if (c.has_default_token) $('#token').placeholder = '服务器已配置默认 token（可留空）';
-})();
-
-// ---------- step 1: verify ----------
-$('#btnVerify').onclick = async () => {
-  const box = $('#checks'); box.innerHTML = '';
-  const names = ['结构 & 活性', '度量比对 (MRENCLAVE)', '通道绑定'];
-  const rows = names.map((nm,i) => {
-    const el = document.createElement('div'); el.className = 'check';
-    el.innerHTML = `<div class="dot run">…</div><div><b>Check ${i+1} · ${nm}</b>
-      <div class="d">验证中…</div></div>`;
-    box.appendChild(el); return el;
-  });
-  $('#btnVerify').disabled = true;
-  try {
-    const res = await api('/api/verify');
-    res.checks.forEach(c => {
-      const el = rows[c.id-1]; const dot = el.querySelector('.dot');
-      dot.className = 'dot ' + (c.ok===true?'ok':c.ok===false?'bad':'');
-      dot.textContent = c.ok===true?'✓':c.ok===false?'✗':'—';
-      el.querySelector('div:last-child').innerHTML =
-        `<b>Check ${c.id} · ${c.name}</b><div class="d">${c.detail}</div>
-         ${c.plain?`<div class="p">💡 ${c.plain}</div>`:''}
-         ${c.value?`<div class="p mono" style="word-break:break-all">${c.value}</div>`:''}`;
-    });
-    const verdict = document.createElement('div'); verdict.className='check';
-    verdict.style.background = res.ok ? '#f2fbf5' : '#fff7ed';
-    verdict.innerHTML = `<div class="dot ${res.ok?'ok':''}">${res.ok?'✓':'!'}</div>
-      <div><b>${res.ok?'通过：可以放心发 prompt 了':'部分通过'}</b>
-      <div class="p">${res.note}</div></div>`;
-    box.appendChild(verdict);
-  } catch(e){ box.innerHTML = '<div class="check"><div class="dot bad">✗</div><div><b>验证失败</b><div class="d">'+e+'</div></div></div>'; }
-  $('#btnVerify').disabled = false;
-};
-
-// ---------- step 2: visualize a chat ----------
-$('#btnChat').onclick = async () => {
-  stopAuto();
-  $('#btnChat').disabled = true; $('#chatStatus').textContent = '发送中…';
-  try {
-    const res = await api('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: j({prompt: $('#prompt').value, token: $('#token').value, model: $('#model').value})});
-    TRACE = res.trace || [];
-    $('#chatStatus').textContent = res.error ? ('注意：'+res.error) : ('上游 HTTP '+res.status+(res.status===403?'（香港地域封锁，已到达真 OpenAI）':''));
-    buildStepbar(); cur = 0; renderStep(0); $('#ctrls').style.display='flex';
-  } catch(e){ $('#chatStatus').textContent = '失败：'+e; }
-  $('#btnChat').disabled = false;
-};
-
-function buildStepbar(){
-  const bar = $('#stepbar'); bar.innerHTML='';
-  TRACE.forEach((t,i)=>{ const c=document.createElement('span'); c.className='pchip'; c.textContent='第'+t.step+'跳';
-    c.onclick=()=>{cur=i;renderStep(i)}; bar.appendChild(c); });
+// ---------- code reader (Monaco) ----------
+let editor=null, SOURCES={}, CHAIN=[], curFile=null, decos=[];
+require.config({paths:{vs:'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs'}});
+require(['vs/editor/editor.main'],async function(){
+  editor=monaco.editor.create($('#monaco'),{value:'// 加载源码中…',language:'go',readOnly:true,theme:'vs-dark',automaticLayout:true,fontSize:12.5,minimap:{enabled:true},scrollBeyondLastLine:false});
+  const src=await api('/api/source'); (src.files||[]).forEach(f=>SOURCES[f.path]=f);
+  const wt=await api('/api/walkthrough'); CHAIN=wt.chain||[];
+  const titles={}; (wt.files||[]).forEach(f=>titles[f.path]=f.title);
+  // file tree
+  const tree=$('#fileTree');
+  (src.files||[]).forEach(f=>{const el=document.createElement('div');el.className='tree-item';
+    el.innerHTML=`<span>${titles[f.path]||f.path.split('/').pop()}</span><span class="fp">${f.path}</span>`;
+    el.onclick=()=>openFile(f.path); tree.appendChild(el);});
+  // chain steps
+  const cl=$('#chainList');
+  CHAIN.forEach((c,i)=>{const el=document.createElement('div');el.className='chain-step';
+    el.innerHTML=`<span class="bdot b-${c.boundary}"></span><span><b>${c.id}. ${c.title}</b><br><span class="st">${c.file.split('/').pop()}:${c.lines}</span></span>`;
+    el.onclick=()=>gotoStep(i); cl.appendChild(el);});
+  if(CHAIN.length) gotoStep(0);
+});
+function openFile(path){
+  const f=SOURCES[path]; if(!f)return;
+  monaco.editor.setModelLanguage(editor.getModel(), f.lang==='go'?'go':(f.lang==='ini'?'ini':'plaintext'));
+  editor.setValue(f.code); curFile=path;
+  document.querySelectorAll('.tree-item').forEach(t=>t.classList.toggle('active', t.querySelector('.fp').textContent===path));
 }
+function gotoStep(i){
+  const c=CHAIN[i]; if(!c)return;
+  document.querySelectorAll('.chain-step').forEach((e,k)=>e.classList.toggle('active',k===i));
+  if(curFile!==c.file) openFile(c.file);
+  const m=(c.lines||'').match(/(\d+)\s*-\s*(\d+)/); let a,b;
+  if(m){a=+m[1];b=+m[2];}else{a=b=parseInt(c.lines)||1;}
+  editor.revealLinesInCenter(a,b);
+  decos=editor.deltaDecorations(decos,[{range:new monaco.Range(a,1,b,1),options:{isWholeLine:true,className:'',inlineClassName:'',linesDecorationsClassName:'',className:'hl-range'}}]);
+  editor.setSelection(new monaco.Range(a,1,b,1));
+  const tagMap={'client-enclave':['sec','客户端 ↔ enclave · 加密可信'],'enclave-upstream':['sec','enclave ↔ 官方上游 · 加密可信'],'enclave-host':['ins','enclave → 不可信 new-api · 边界'],'internal':['int','enclave 内部']};
+  const t=tagMap[c.boundary]||['int',c.boundary];
+  $('#codeExpl').style.display='block'; $('#exTitle').textContent=`第 ${c.id} 步 · ${c.title}`;
+  $('#exTag').className='tag '+t[0]; $('#exTag').textContent=t[1];
+  $('#exBody').textContent=c.explain||'';
+  $('#exData').innerHTML=c.data?('<b>这条边界流过的数据：</b>'+c.data):'';
+}
+// highlight style for revealed range
+const st=document.createElement('style');st.textContent='.hl-range{background:rgba(79,70,229,.18)}';document.head.appendChild(st);
 
-function renderStep(i){
-  cur = i;
+// ---------- verify ----------
+$('#btnVerify').onclick=async()=>{
+  const box=$('#checks');box.innerHTML='';
+  const names=['结构 & 活性','度量比对 (MRENCLAVE)','通道绑定'];
+  const rows=names.map((nm,i)=>{const el=document.createElement('div');el.className='check';
+    el.innerHTML=`<div class="dot run">…</div><div><b>Check ${i+1} · ${nm}</b><div class="d">验证中…</div></div>`;box.appendChild(el);return el;});
+  $('#btnVerify').disabled=true;
+  try{const res=await api('/api/verify');
+    res.checks.forEach(c=>{const el=rows[c.id-1],dot=el.querySelector('.dot');
+      dot.className='dot '+(c.ok===true?'ok':c.ok===false?'bad':'');dot.textContent=c.ok===true?'✓':c.ok===false?'✗':'—';
+      el.querySelector('div:last-child').innerHTML=`<b>Check ${c.id} · ${c.name}</b><div class="d">${c.detail}</div>${c.plain?`<div class="p">💡 ${c.plain}</div>`:''}${c.value?`<div class="p mono" style="word-break:break-all">${c.value}</div>`:''}`;});
+    const v=document.createElement('div');v.className='check';v.style.background=res.ok?'#f2fbf5':'#fff7ed';
+    v.innerHTML=`<div class="dot ${res.ok?'ok':''}">${res.ok?'✓':'!'}</div><div><b>${res.ok?'通过：可以放心发 prompt 了':'部分通过'}</b><div class="p">${res.note||''}</div></div>`;box.appendChild(v);
+  }catch(e){box.innerHTML='<div class="check"><div class="dot bad">✗</div><div><b>验证失败</b><div class="d">'+e+'</div></div></div>';}
+  $('#btnVerify').disabled=false;
+};
+
+// ---------- visualize ----------
+let TRACE=[],cur=0,timer=null;
+$('#btnChat').onclick=async()=>{stopAuto();$('#btnChat').disabled=true;$('#chatStatus').textContent='发送中…';
+  try{const res=await api('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:j({prompt:$('#prompt').value,token:$('#token').value,model:$('#model').value})});
+    TRACE=res.trace||[];$('#chatStatus').textContent=res.error?('注意：'+res.error):('provider='+(res.provider||'?')+' · 上游 HTTP '+res.status+(res.status===200?'（成功✓）':res.status===403?'（地域封锁，已到达官方）':''));
+    buildStepbar();cur=0;renderStep(0);$('#ctrls').style.display='flex';
+  }catch(e){$('#chatStatus').textContent='失败：'+e;}
+  $('#btnChat').disabled=false;};
+function buildStepbar(){const bar=$('#stepbar');bar.innerHTML='';TRACE.forEach((t,i)=>{const c=document.createElement('span');c.className='pchip';c.textContent='第'+t.step+'跳';c.onclick=()=>{cur=i;renderStep(i)};bar.appendChild(c);});}
+function renderStep(i){cur=i;const t=TRACE[i];
   document.querySelectorAll('.pchip').forEach((c,k)=>c.classList.toggle('on',k===i));
-  // highlight nodes/edges
-  const t = TRACE[i];
-  document.querySelectorAll('.node').forEach(n=>n.classList.toggle('active',
-     n.dataset.node===t.frm || n.dataset.node===t.to));
-  document.querySelectorAll('.edge').forEach(e=>e.classList.remove('active','insecure'));
-  // pick the edge between frm and to (best-effort by index of the untrusted hop)
+  document.querySelectorAll('#flowd .node').forEach(n=>n.classList.toggle('active',n.dataset.node===t.frm||n.dataset.node===t.to||(n.dataset.node==='OpenAI 官方'&&(t.frm.includes('官方')||t.to.includes('官方')))));
+  document.querySelectorAll('#flowd .edge').forEach(e=>e.classList.remove('active','insecure'));
   const order=['你 (客户端)','SGX Enclave','new-api 控制面 (不可信)','OpenAI 官方'];
-  const a=order.indexOf(t.frm), b=order.indexOf(t.to);
-  if(a>=0&&b>=0){ const ei=Math.min(a,b); const edge=document.querySelector('.edge[data-edge="'+ei+'"]');
-    if(edge){edge.classList.add('active'); if(!t.secure) edge.classList.add('insecure');} }
-  // panel
-  const p = $('#panel');
-  p.innerHTML = `<div class="panel ${t.secure?'secure':'insecure'}">
-     <div class="head">${t.frm} → ${t.to}
-       <span class="lock">${t.secure?'🔒 加密/可信通道':'⚠ 不可信边界'}</span></div>
-     <div class="note ${t.step===2?'key':''}">${t.step===2?'★ ':''}${t.title}<br><span class="muted">${t.note}</span></div>
-     <pre>${escapeHtml(j(t.data))}</pre></div>`;
-}
-function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
-
+  const norm=x=>x.includes('官方')?'OpenAI 官方':x;const a=order.indexOf(norm(t.frm)),b=order.indexOf(norm(t.to));
+  if(a>=0&&b>=0){const e=document.querySelector('#flowd .edge[data-edge="'+Math.min(a,b)+'"]');if(e){e.classList.add('active');if(!t.secure)e.classList.add('insecure');}}
+  $('#panel').innerHTML=`<div class="panel ${t.secure?'secure':'insecure'}"><div class="head">${t.frm} → ${t.to}<span class="lock">${t.secure?'🔒 加密/可信通道':'⚠ 不可信边界'}</span></div><div class="note ${t.step===2?'key':''}">${t.step===2?'★ ':''}${t.title}<br><span class="muted">${t.note}</span></div><pre>${esc(j(t.data))}</pre></div>`;}
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 $('#prev').onclick=()=>renderStep(Math.max(0,cur-1));
 $('#next').onclick=()=>renderStep(Math.min(TRACE.length-1,cur+1));
-$('#auto').onclick=function(){ if(timer){stopAuto();return;} this.textContent='⏸ 暂停';
-  timer=setInterval(()=>{ if(cur>=TRACE.length-1){stopAuto();return;} renderStep(cur+1); },1600); };
-function stopAuto(){ if(timer){clearInterval(timer);timer=null;} $('#auto').textContent='▶ 自动播放'; }
+$('#auto').onclick=function(){if(timer){stopAuto();return;}this.textContent='⏸ 暂停';timer=setInterval(()=>{if(cur>=TRACE.length-1){stopAuto();return;}renderStep(cur+1);},1600);};
+function stopAuto(){if(timer){clearInterval(timer);timer=null;}$('#auto').textContent='▶ 自动播放';}
+
+// ---------- footer: verifier explainer ----------
+fetch('/fragments/verifier').then(r=>r.text()).then(h=>{$('#verifier').innerHTML=h;}).catch(()=>{});
 </script>
 </body>
 </html>

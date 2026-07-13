@@ -1,0 +1,168 @@
+{
+  "files": [
+    {
+      "path": "cmd/relay-core/main.go",
+      "lang": "go",
+      "title": "入口·请求管线",
+      "purpose": "定义 serveRelay 请求管线:读体→PeekRequest→SelectChannel→飞地内重判官方→取密钥→forward→Settle。"
+    },
+    {
+      "path": "cmd/relay-core/server.go",
+      "lang": "go",
+      "title": "HTTP 服务·RA-TLS 监听",
+      "purpose": "用 RA-TLS 证书起 TLS 监听、注册 /attestation 与 /v1/chat/completions 路由、密封密钥读取与控制面装配(main)。"
+    },
+    {
+      "path": "cmd/relay-core/control_client.go",
+      "lang": "go",
+      "title": "控制面客户端",
+      "purpose": "httpControlPlane 通过 loopback POST 到 new-api /internal/relaycore/select,只上送 {token, model}。"
+    },
+    {
+      "path": "cmd/relay-core/dispatch.go",
+      "lang": "go",
+      "title": "上游转发·强校验 TLS",
+      "purpose": "强校验 TLS 客户端、按 profile 注入凭据、逐字节转发请求体、SSE 流式穿透并 PeekUsage 计数。"
+    },
+    {
+      "path": "pkg/relaycontrol/wire.go",
+      "lang": "go",
+      "title": "线协议·最小内省",
+      "purpose": "定义飞地↔控制面的纯元数据线协议,并只从原始字节抠出 model/stream 与 usage,绝不物化 prompt。"
+    },
+    {
+      "path": "pkg/officialurls/officialurls.go",
+      "lang": "go",
+      "title": "官方 URL 表",
+      "purpose": "按渠道类型索引的官方 base URL 单一真源,编译进 MRENCLAVE,宿主无法把官方渠道重定向。"
+    },
+    {
+      "path": "pkg/officialurls/profiles.go",
+      "lang": "go",
+      "title": "各家鉴权画像",
+      "purpose": "官方 provider 的鉴权注入方式白名单(Bearer / x-api-key / x-goog-api-key + 必需头),编译进飞地。"
+    },
+    {
+      "path": "pkg/raenclave/raenclave.go",
+      "lang": "go",
+      "title": "RA-TLS 证书·DCAP 报价",
+      "purpose": "生成绑定 DCAP quote 的 RA-TLS 证书(SPKI→report_data→quote),并把上游密钥密封写入 MRENCLAVE 加密挂载。"
+    },
+    {
+      "path": "cmd/relay-core/relay-core.manifest.template",
+      "lang": "ini",
+      "title": "Gramine 清单",
+      "purpose": "SGX 运行时约束:sgx.debug=false、DCAP 远程证明、仅加密 tmpfs 与 MRENCLAVE 加密密钥挂载、无可写宿主盘。"
+    }
+  ],
+  "chain": [
+    {
+      "id": 1,
+      "file": "pkg/raenclave/raenclave.go",
+      "lines": "95-114",
+      "title": "飞地自签 RA-TLS 证书,把 TLS 公钥绑定到 DCAP 报价",
+      "boundary": "client-enclave",
+      "explain": "在接任何请求前,飞地在内存里现生成一对 EC 密钥,把证书公钥(SPKI)做 SHA-512 得到 64 字节 report_data,写进 /dev/attestation/user_report_data,再从 /dev/attestation/quote 读回一份 SGX DCAP quote,并塞进 X.509 扩展。这样客户端拿到 TLS 证书时能验证'这把公钥确实来自这台被硬件度量过的飞地',相当于给 HTTPS 证书附了张硬件签名的身份证;私钥只在进程内存,永不落盘。非飞地(本机开发)时 quote 缺失,Attested=false。",
+      "data": "这条边界上只有证书公钥 + DCAP quote(硬件身份度量),不含任何请求/prompt。"
+    },
+    {
+      "id": 2,
+      "file": "cmd/relay-core/server.go",
+      "lines": "237-247",
+      "title": "客户端 TLS 在 enclave 内终止(RA-TLS)",
+      "boundary": "client-enclave",
+      "explain": "服务器直接用上一步那张 RA-TLS 证书起 TLS 监听(TLSConfig.Certificates = raCert.TLS,ListenAndServeTLS(\"\",\"\") 不读磁盘证书文件)。客户端的 HTTPS 连接在飞地内部解密终止——也就是说 prompt 明文第一次出现,是在 SGX 加密内存(EPC)里,宿主机或运维即便在网卡抓包也只看到密文。",
+      "data": "网络上是加密 TLS 流量;解密后的完整请求(含 prompt)只存在于飞地加密内存。"
+    },
+    {
+      "id": 3,
+      "file": "cmd/relay-core/server.go",
+      "lines": "79-83",
+      "title": "路由分发到 serveRelay",
+      "boundary": "internal",
+      "explain": "标准 net/http mux 按路径把 POST /v1/chat/completions 交给 h.serveRelay,和普通 Go 后端无异。外面再包一层 statusTrackingWriter,是为了流式响应一旦开始写就不再误写 HTTP 错误码,同时透传 Flush 支持 SSE。",
+      "data": "已在飞地内解密的 HTTP 请求,按 URL path 分发到处理器。"
+    },
+    {
+      "id": 4,
+      "file": "cmd/relay-core/main.go",
+      "lines": "66-72",
+      "title": "读取请求体到加密内存(不落盘)",
+      "boundary": "internal",
+      "explain": "serveRelay 第一步用 io.ReadAll 把请求体整包读进内存。这段字节(含 messages/prompt)全程只在飞地加密内存里:后面会原样转发给上游,绝不写磁盘、不进数据库、不打日志。配合 Gramine 清单里只有加密 tmpfs、无可写宿主盘(manifest 44-64),即便代码 bug 误调 os.Create 也只能写进加密 EPC。",
+      "data": "完整请求字节,含 prompt/messages,仅存在于飞地内存。"
+    },
+    {
+      "id": 5,
+      "file": "pkg/relaycontrol/wire.go",
+      "lines": "84-102",
+      "title": "PeekRequest 只抽取 model/stream(prompt 不被物化)",
+      "boundary": "internal",
+      "explain": "关键设计:飞地只把请求体反序列化进一个极小的 requestPeek{model, stream} 结构。encoding/json 自动丢弃未知字段,所以 messages/input 这些 prompt 内容根本没被解析成任何 Go 值——飞地'看得见路由信息,但从不物化 prompt'。原始字节仍原样保留,用于第 10 步转发。model 为空则直接 400。",
+      "data": "只提取 model 名 + stream 布尔;prompt 内容被直接丢弃,不生成任何变量。"
+    },
+    {
+      "id": 6,
+      "file": "cmd/relay-core/control_client.go",
+      "lines": "34-56",
+      "title": "SelectChannel RPC 到不可信的 new-api(只有 {model,token} 越界)",
+      "boundary": "enclave-host",
+      "explain": "飞地要问不可信的 new-api:'这个 token 能用吗?这个 model 走哪个渠道?'。真实控制面 httpControlPlane 通过 loopback(127.0.0.1)POST 到 new-api 的 /internal/relaycore/select。请求体 cpSelectReq 只有两个字段 {token, model}。重点:跨出飞地到宿主机的,只有网关 token(网关自己的凭据,不是内容)和 model 名——prompt 一个字都不出飞地。new-api 回渠道 id/类型、用户与 token id,以及(v1 宿主可见路径下的)上游 key。",
+      "data": "只有 {token, model} 越过飞地→宿主边界;绝无 prompt/messages/响应内容。"
+    },
+    {
+      "id": 7,
+      "file": "cmd/relay-core/main.go",
+      "lines": "99-112",
+      "title": "飞地内重新判定官方性 + 使用编译进去的官方 URL",
+      "boundary": "internal",
+      "explain": "反 MITM 的核心:飞地不信宿主返回的 sel.IsOfficial,而是用自己编译进 MRENCLAVE 的表重新判定。ProfileFor/HasOfficial 查编译期固化的白名单,再由 officialUpstreamURL(main.go 49-59)用固化的官方 host 拼出 URL。就算恶意宿主把渠道 base_url 改成自己的代理,飞地也只会拨编译进去的 api.openai.com 等官方 host,把'官方'渠道重定向到中间人在这里被拒。非白名单 provider 直接 400。",
+      "data": "渠道类型 → 编译进飞地的官方 URL;宿主给的 base_url/IsOfficial 提示被忽略。"
+    },
+    {
+      "id": 8,
+      "file": "cmd/relay-core/main.go",
+      "lines": "114-122",
+      "title": "从飞地密封存储取上游密钥(宿主看不到)",
+      "boundary": "enclave-host",
+      "explain": "上游真正的 provider key 不来自宿主。sel.UpstreamAPIKey 一般为空,飞地转而调 h.keys.KeyFor 从自己的密封存储读(实现见 server.go fileKeyStore 105-119)。该文件在 Gramine 清单里是 key_name=_sgx_mrenclave 的 encrypted 挂载(manifest 55-60):密文放在宿主磁盘,只有具备这个确切 MRENCLAVE 的飞地能在内存里解密。宿主永远只拿到密文,推不出 key。",
+      "data": "跨边界的只有磁盘上的密文;明文 provider key 只在飞地内存出现。"
+    },
+    {
+      "id": 9,
+      "file": "cmd/relay-core/dispatch.go",
+      "lines": "56-66",
+      "title": "按各家 profile 注入上游凭据(Bearer / x-api-key / x-goog-api-key)",
+      "boundary": "internal",
+      "explain": "forward 按该 provider 的官方 profile 注入凭据:OpenAI/OpenRouter 用 Authorization: Bearer <key>,Anthropic 用 x-api-key + anthropic-version 版本头,Gemini 用 x-goog-api-key(见 profiles.go 23-41)。客户端进来时用的网关 token 到此为止,绝不透传给上游;上游只会看到飞地注入的 provider key。stream 时再补 Accept: text/event-stream。",
+      "data": "构造上游请求头:注入 provider key 与必需头,丢弃客户端网关 token。"
+    },
+    {
+      "id": 10,
+      "file": "cmd/relay-core/dispatch.go",
+      "lines": "23-37",
+      "title": "强校验 TLS 拨号到官方上游",
+      "boundary": "enclave-upstream",
+      "explain": "newStrictUpstreamClient 建的 HTTP client 把 TLS 校验写死:InsecureSkipVerify=false 且没有任何 env 开关能削弱,Proxy=nil 完全无视 HTTP(S)_PROXY。配合第 7 步固化的官方 host,forward 里 client.Do(dispatch.go 68)把请求体一字不改发往官方上游。这样宿主既不能降级/跳过 TLS 校验,也不能塞代理做中间人。",
+      "data": "逐字节原样的请求体(含 prompt)+ 注入的 provider key,经强校验 TLS 发往编译固化的官方 host。"
+    },
+    {
+      "id": 11,
+      "file": "cmd/relay-core/dispatch.go",
+      "lines": "104-133",
+      "title": "响应流式穿透 + PeekUsage 计数 token",
+      "boundary": "enclave-upstream",
+      "explain": "上游响应回来后,streamThrough 一行行(SSE 帧)边收边 w.Write + Flush 直接推给客户端,内容只过内存缓冲、不落盘、逐帧丢弃。同时对每个 data: 帧调 relaycontrol.PeekUsage(wire.go 120-136)只抠出 usage 里的 token 计数,保留最后一个非空 usage 用于计费。非流式响应走 bufferThrough(88-98)同理:读满内存→转发→PeekUsage→释放。",
+      "data": "响应内容穿透转发给客户端(不留存);只从中提取 prompt/completion/total token 计数。"
+    },
+    {
+      "id": 12,
+      "file": "cmd/relay-core/main.go",
+      "lines": "138-151",
+      "title": "Settle 回传:只带元数据",
+      "boundary": "enclave-host",
+      "explain": "最后飞地把 SettleRequest 回传控制面用于扣费。这个结构体按设计只有元数据:request_id、user/token/channel id、prompt/completion/total token 数、延迟毫秒、上游状态码、is_stream——没有任何来自 prompt 或响应文本的字段(定义见 wire.go 63-78,配套 settleJSONFields 测试把'只准元数据'这条不变量锁死)。计费闭环完成,而内容从不出飞地。",
+      "data": "只有计费元数据(token 数 / 延迟 / 状态码 / 各类 id);无任何内容字段。"
+    }
+  ]
+}
