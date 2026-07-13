@@ -21,3 +21,7 @@ enclave-key.pem
 .env
 .env.*
 *.log
+
+# python
+__pycache__/
+*.pyc
