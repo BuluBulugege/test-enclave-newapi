@@ -167,7 +167,7 @@
 
   <h3>2.4 在本系统中的落地</h3>
   <p>我们把 AI 请求的热路径——<strong>relay-core</strong>——整体放进 enclave，用 <strong>Gramine-SGX 1.9</strong> 这个 LibOS 把 Go 二进制无改造地跑进 SGX。远程认证走 <strong>DCAP（Data Center Attestation Primitives）</strong>：CPU 出具的 quote 内嵌 <strong>MRENCLAVE</strong>——对 enclave 初始代码页与配置（manifest）算出的度量指纹。本系统当前的度量值为：</p>
-  <p><code>MRENCLAVE = daed45e63bed1cfe430b2d2dfd414851fdff1fd409c94855171bf6f9ccc2be64</code></p>
+  <p><code>MRENCLAVE = 4aa951d16a0c237605f032cd480095b65be1f485e9f7a959a16f38a80428a445</code></p>
   <p>RA-TLS 把这份硬件身份绑定到网络通道：enclave 在内部生成 TLS 密钥后，将 <code>report_data = SHA-512(TLS SubjectPublicKeyInfo)</code> 写进 quote，客户端据此确认"正在和我通话的这条 TLS，其私钥就活在被认证的 enclave 内部"（详见第 3、4 节）。</p>
   <p>与之对照，<strong>new-api 是不可信的控制面（control plane）</strong>，运行在 enclave 之外的普通宿主进程里。它只做元数据决策——用哪个渠道、扣多少 token——跨越信任边界流向它的<strong>只有 {model, token}，prompt 正文永不外泄</strong>。enclave 拿到路由决策后，直接对官方上游发起严格 TLS 连接：OpenAI（Bearer）、OpenRouter（Bearer + HTTP-Referer / X-Title）、Anthropic（x-api-key + anthropic-version）、Gemini / AI Studio（x-goog-api-key）。</p>
   <p>为了让 MRENCLAVE 可被任何人独立复算，构建被固定为<strong>可复现构建（reproducible build）</strong>：锁定 <strong>Go 1.26.1 + Gramine 1.9</strong> 及基础镜像，两次编译得到字节一致的二进制，从而收敛到同一 MRENCLAVE——指纹因此可以脱离对发布者的信任而被验证。</p>

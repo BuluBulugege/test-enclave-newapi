@@ -12,7 +12,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 SECT_DIR = HERE / "wp_sections"
 OUT = HERE / "whitepaper.html"
-MRENCLAVE = "daed45e63bed1cfe430b2d2dfd414851fdff1fd409c94855171bf6f9ccc2be64"
+MRENCLAVE = "4aa951d16a0c237605f032cd480095b65be1f485e9f7a959a16f38a80428a445"
 
 CSS = """
 :root{--ink:#0f1222;--ink2:#3a3f5c;--muted:#6b7188;--bg:#f5f6fb;--card:#fff;--line:#e6e7f0;

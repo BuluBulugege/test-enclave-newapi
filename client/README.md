@@ -22,7 +22,7 @@ pip install cryptography
 
 python3 verify_enclave.py \
   --addr 8.217.148.82:8443 \
-  --mrenclave daed45e63bed1cfe430b2d2dfd414851fdff1fd409c94855171bf6f9ccc2be64
+  --mrenclave 4aa951d16a0c237605f032cd480095b65be1f485e9f7a959a16f38a80428a445
 ```
 
 期望输出：
@@ -44,7 +44,7 @@ quote，在装有 `libsgx_dcap_quoteverify` 的机器上再跑 Go 验证器：
 ```bash
 CGO_ENABLED=1 go build -tags dcap ./cmd/relay-verify
 ./relay-verify -addr 8.217.148.82:8443 \
-  -mrenclave daed45e63bed1cfe430b2d2dfd414851fdff1fd409c94855171bf6f9ccc2be64 -dcap-verify
+  -mrenclave 4aa951d16a0c237605f032cd480095b65be1f485e9f7a959a16f38a80428a445 -dcap-verify
 ```
 
 通过后显示 `✅ DCAP signature chain verified to Intel SGX root` + `VERIFICATION PASSED`。

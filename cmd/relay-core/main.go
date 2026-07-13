@@ -121,7 +121,14 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 			"this provider is not a vetted official upstream in the enclave")
 		return
 	}
-	upstreamURL, err := officialUpstreamURL(sel.ChannelType, r.URL.Path)
+	// Some providers serve the OpenAI-style request under a different upstream
+	// path (e.g. Gemini's OpenAI-compatible surface at /v1beta/openai). Apply the
+	// profile's path rewrite, if any, before building the compiled-in-host URL.
+	upstreamPath := r.URL.Path
+	if profile.PathRewrite != nil {
+		upstreamPath = profile.PathRewrite(upstreamPath)
+	}
+	upstreamURL, err := officialUpstreamURL(sel.ChannelType, upstreamPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

@@ -1,8 +1,8 @@
 // Package officialurls is the single source of truth for each channel type's
 // official/default upstream base URL, indexed by channel type id.
 //
-// It is a pure leaf package: it imports ONLY the standard library (in fact,
-// nothing at all), so it can be linked into the SGX relay-core enclave without
+// It is a pure leaf package: it imports ONLY the standard library, so it can be
+// linked into the SGX relay-core enclave without
 // dragging in model / service / logger or any other business package. The
 // enclave measures this table into MRENCLAVE, which makes the set of official
 // endpoints tamper-proof at runtime: a malicious host cannot repoint an
@@ -14,6 +14,58 @@
 // a golden-index test pins the well-known entries so an accidental insertion or
 // reordering fails CI instead of silently shifting every provider's endpoint.
 package officialurls
+
+import (
+	"net/url"
+	"strings"
+)
+
+// normalizeHost extracts and lower-cases the hostname from a host or full URL,
+// stripping scheme, userinfo, port, and any trailing dot. Returns "" on parse
+// failure. Defensive against lookalike/tricks (uppercase, port, userinfo).
+func normalizeHost(hostOrURL string) string {
+	s := strings.TrimSpace(hostOrURL)
+	if s == "" {
+		return ""
+	}
+	if !strings.Contains(s, "://") {
+		s = "//" + s // let url.Parse treat a bare host[:port] as authority
+	}
+	u, err := url.Parse(s)
+	if err != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+}
+
+// IsOfficialHostSuffix reports whether host (a hostname or full URL) is an
+// official upstream host for a per-resource/per-region channel type, using each
+// provider's real host shape. The apex is always the provider's (azure.com /
+// amazonaws.com / googleapis.com — all provider-controlled), so an apex-swap
+// like "openai.azure.com.attacker.com" is rejected because it does not end with
+// the required suffix. Boundaries match each provider's actual format:
+//   - Azure  (3): "{resource}.openai.azure.com" / ".cognitiveservices.azure.com"
+//     (dot label boundary — "evil-openai.azure.com" is NOT under the zone → rejected)
+//   - AWS   (33): "bedrock-runtime.{region}.amazonaws.com" (prefix + suffix, so a
+//     bare "s3.amazonaws.com" is rejected)
+//   - Vertex(41): "aiplatform.googleapis.com" or "{region}-aiplatform.googleapis.com"
+//     (regional host joins the region with a hyphen, so the hyphen form is allowed)
+func IsOfficialHostSuffix(channelType int, host string) bool {
+	h := normalizeHost(host)
+	if h == "" {
+		return false
+	}
+	switch channelType {
+	case 3:
+		return strings.HasSuffix(h, ".openai.azure.com") || strings.HasSuffix(h, ".cognitiveservices.azure.com")
+	case 33:
+		return strings.HasPrefix(h, "bedrock-runtime.") && strings.HasSuffix(h, ".amazonaws.com")
+	case 41:
+		return h == "aiplatform.googleapis.com" || strings.HasSuffix(h, "-aiplatform.googleapis.com")
+	default:
+		return false
+	}
+}
 
 // BaseURLs maps channelType -> official base URL. The index is the channel type
 // id (see constant.ChannelType*). An empty string means the type has no
