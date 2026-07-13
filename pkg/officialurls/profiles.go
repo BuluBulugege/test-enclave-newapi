@@ -30,14 +30,18 @@ var profiles = map[int]UpstreamProfile{
 		"X-Title":      "new-api",
 	}},
 
-	// Anthropic (14): https://api.anthropic.com — x-api-key + version pin
+	// Anthropic (14): https://api.anthropic.com — x-api-key + version pin.
+	// Served via /v1/messages (native Anthropic Messages API).
 	14: {AuthHeader: "x-api-key", AuthPrefix: "", ExtraHeaders: map[string]string{
 		"anthropic-version": "2023-06-01",
 	}},
 
-	// Gemini / Google AI Studio (24): https://generativelanguage.googleapis.com
-	// — x-goog-api-key (native generativelanguage API).
-	24: {AuthHeader: "x-goog-api-key", AuthPrefix: ""},
+	// Gemini / Google AI Studio (24), Azure (3), Vertex (41), AWS Bedrock (33)
+	// are DEFERRED: they need per-provider URL building (native paths differ from
+	// /v1/chat/completions) and/or non-static auth (OAuth2 service-account, SigV4)
+	// that the current single-host + static-header profile cannot express. They
+	// will be added with a profile redesign (host-suffix validation + a signing
+	// hook) and validated with published test vectors before the enclave rebuild.
 }
 
 // ProfileFor returns the official auth profile for a channel type. ok=false for

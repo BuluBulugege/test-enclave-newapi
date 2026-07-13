@@ -76,10 +76,15 @@ func newHandler(cp ControlPlane, keys UpstreamKeyStore, raCert *raenclave.Cert) 
 		_, _ = w.Write([]byte(hexstr(raCert.ReportData[:])))
 		_, _ = w.Write([]byte(`"}`))
 	})
-	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+	relay := func(w http.ResponseWriter, r *http.Request) {
 		sw := &statusTrackingWriter{ResponseWriter: w}
 		h.serveRelay(sw, r)
-	})
+	}
+	mux.HandleFunc("/v1/chat/completions", relay)
+	// Anthropic-native messages endpoint (Claude via /official). The Anthropic
+	// official profile + base URL already exist; this is routing + format
+	// plumbing only, still a faithful pass-through.
+	mux.HandleFunc("/v1/messages", relay)
 	return mux
 }
 

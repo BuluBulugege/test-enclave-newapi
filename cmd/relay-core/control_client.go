@@ -34,6 +34,7 @@ func newHTTPControlPlane(baseURL string) *httpControlPlane {
 type cpSelectReq struct {
 	Token string `json:"token"`
 	Model string `json:"model"`
+	Path  string `json:"path,omitempty"`
 }
 
 type cpSelectResp struct {
@@ -47,7 +48,7 @@ type cpSelectResp struct {
 }
 
 func (h *httpControlPlane) SelectChannel(ctx context.Context, req relaycontrol.SelectChannelRequest) (relaycontrol.SelectChannelResponse, error) {
-	payload, err := json.Marshal(cpSelectReq{Token: req.RawToken, Model: req.Model})
+	payload, err := json.Marshal(cpSelectReq{Token: req.RawToken, Model: req.Model, Path: req.Path})
 	if err != nil {
 		return relaycontrol.SelectChannelResponse{}, err
 	}
@@ -81,11 +82,43 @@ func (h *httpControlPlane) SelectChannel(ctx context.Context, req relaycontrol.S
 	}, nil
 }
 
-// Settle logs billing metadata locally for the demo. A production build would
-// POST this to a new-api /internal/relaycore/settle endpoint to deduct quota.
+// Settle POSTs the completion metadata (token counts only — no content) to
+// new-api's /internal/relaycore/settle so the user's quota is deducted. It
+// retries a couple of times on transport failure; new-api dedups on RequestID so
+// an at-least-once retry cannot double-charge. Errors are returned to the caller
+// (logged, non-fatal — the client response has already been streamed).
 func (h *httpControlPlane) Settle(ctx context.Context, req relaycontrol.SettleRequest) error {
-	fmt.Printf("[settle] request_id=%s model=%s prompt=%d completion=%d total=%d latency_ms=%d status=%d\n",
-		req.RequestID, req.Model, req.PromptTokens, req.CompletionTokens, req.TotalTokens,
-		req.LatencyMs, req.UpstreamStatusCode)
-	return nil
+	payload, err := json.Marshal(req)
+	if err != nil {
+		return err
+	}
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+			h.baseURL+"/internal/relaycore/settle", bytes.NewReader(payload))
+		if err != nil {
+			return err
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+		resp, err := h.client.Do(httpReq)
+		if err != nil {
+			lastErr = fmt.Errorf("settle unreachable: %w", err)
+			continue
+		}
+		var out struct {
+			OK    bool   `json:"ok"`
+			Error string `json:"error,omitempty"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		resp.Body.Close()
+		if out.OK {
+			return nil
+		}
+		// A rejection (e.g. non-official group) is terminal — do not retry.
+		if out.Error != "" {
+			return fmt.Errorf("settle rejected: %s", out.Error)
+		}
+		lastErr = fmt.Errorf("settle failed (status %d)", resp.StatusCode)
+	}
+	return lastErr
 }

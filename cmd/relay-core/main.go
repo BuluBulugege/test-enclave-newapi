@@ -17,6 +17,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/QuantumNous/new-api/pkg/officialurls"
 	"github.com/QuantumNous/new-api/pkg/relaycontrol"
@@ -78,13 +80,27 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Ask the control plane which channel to use (no content sent).
+	// 3. Ask the control plane which channel to use (no content sent). The relay
+	//    format + path are derived from the request path so the control plane can
+	//    resolve path-scoped channels (e.g. Claude /v1/messages) correctly.
+	relayFormat := "openai"
+	if strings.HasSuffix(r.URL.Path, "/messages") {
+		relayFormat = "claude"
+	}
+
+	// For OpenAI-family streams, ensure the upstream emits a usage frame so the
+	// request can be billed (the enclave has no tokenizer). This modifies only
+	// top-level JSON keys; prompt content stays opaque and is never materialized.
+	if relayFormat == "openai" && isStream {
+		body = relaycontrol.EnsureStreamUsage(body)
+	}
 	sel, err := h.cp.SelectChannel(ctx, relaycontrol.SelectChannelRequest{
 		RequestID:   requestID,
 		Model:       model,
 		TokenHash:   hashToken(r.Header.Get("Authorization")),
 		RawToken:    bearerToken(r.Header.Get("Authorization")),
-		RelayFormat: "openai",
+		RelayFormat: relayFormat,
+		Path:        r.URL.Path,
 		IsStream:    isStream,
 	})
 	if err != nil {
@@ -135,8 +151,10 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Settle: METADATA ONLY.
-	_ = h.cp.Settle(ctx, relaycontrol.SettleRequest{
+	// 7. Settle: METADATA ONLY (token counts, no content). The client response is
+	//    already delivered, so a settle failure is non-fatal — but it MUST be
+	//    visible (a dropped settle = a free request), so log it to stderr.
+	if serr := h.cp.Settle(ctx, relaycontrol.SettleRequest{
 		RequestID:          requestID,
 		UserID:             sel.UserID,
 		TokenID:            sel.TokenID,
@@ -148,7 +166,9 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 		LatencyMs:          latency,
 		UpstreamStatusCode: status,
 		IsStream:           isStream,
-	})
+	}); serr != nil {
+		fmt.Fprintf(os.Stderr, "[settle] failed request_id=%s: %v\n", requestID, serr)
+	}
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {

@@ -104,21 +104,32 @@ func (h *relayHandler) bufferThrough(w http.ResponseWriter, resp *http.Response)
 func (h *relayHandler) streamThrough(w http.ResponseWriter, resp *http.Response) (relaycontrol.Usage, int, error) {
 	flusher, _ := w.(http.Flusher)
 	reader := bufio.NewReaderSize(resp.Body, 64*1024)
-	var lastUsage relaycontrol.Usage
+	var acc relaycontrol.Usage
 
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
 			if _, werr := w.Write(line); werr != nil {
-				return lastUsage, resp.StatusCode, werr
+				return finalizeUsage(acc), resp.StatusCode, werr
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 			// SSE data frames are "data: {json}". Peek usage from the JSON payload.
+			// MERGE per field across frames (do not replace): Anthropic emits
+			// input_tokens on message_start and output_tokens on message_delta, so
+			// keeping the last non-zero value of each field accumulates both.
 			if trimmed := bytes.TrimPrefix(bytes.TrimSpace(line), []byte("data:")); len(trimmed) > 0 {
 				if u, ok := relaycontrol.PeekUsage(bytes.TrimSpace(trimmed)); ok {
-					lastUsage = u
+					if u.PromptTokens > 0 {
+						acc.PromptTokens = u.PromptTokens
+					}
+					if u.CompletionTokens > 0 {
+						acc.CompletionTokens = u.CompletionTokens
+					}
+					if u.TotalTokens > 0 {
+						acc.TotalTokens = u.TotalTokens
+					}
 				}
 			}
 		}
@@ -126,10 +137,19 @@ func (h *relayHandler) streamThrough(w http.ResponseWriter, resp *http.Response)
 			break
 		}
 		if err != nil {
-			return lastUsage, resp.StatusCode, err
+			return finalizeUsage(acc), resp.StatusCode, err
 		}
 	}
-	return lastUsage, resp.StatusCode, nil
+	return finalizeUsage(acc), resp.StatusCode, nil
+}
+
+// finalizeUsage fills in TotalTokens from prompt+completion when the upstream
+// only reported the split counts (e.g. Anthropic).
+func finalizeUsage(u relaycontrol.Usage) relaycontrol.Usage {
+	if u.TotalTokens == 0 {
+		u.TotalTokens = u.PromptTokens + u.CompletionTokens
+	}
+	return u
 }
 
 // hashToken returns a hex SHA-256 of the bearer token so the enclave can send a

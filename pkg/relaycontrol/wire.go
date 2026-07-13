@@ -27,17 +27,22 @@ import (
 // call. It carries NO prompt content — only the model, a hash of the caller's
 // gateway token, and coarse routing metadata.
 type SelectChannelRequest struct {
-	RequestID   string `json:"request_id"`
-	Model       string `json:"model"`
-	TokenHash   string `json:"token_hash"`
+	RequestID string `json:"request_id"`
+	Model     string `json:"model"`
+	TokenHash string `json:"token_hash"`
 	// RawToken is the gateway API token (sk-...) the caller presented. It is the
 	// gateway's OWN credential (not prompt content), sent to the untrusted control
 	// plane over loopback because new-api authenticates by matching the raw key.
 	// This is auth metadata, not request/response content — the no-content
 	// invariant is unaffected.
-	RawToken    string `json:"raw_token,omitempty"`
-	RelayFormat string `json:"relay_format"` // v1: always "openai"
-	IsStream    bool   `json:"is_stream"`
+	RawToken string `json:"raw_token,omitempty"`
+	// RelayFormat is the request family: "openai" (/v1/chat/completions) or
+	// "claude" (/v1/messages). Routing metadata only.
+	RelayFormat string `json:"relay_format"`
+	// Path is the upstream request path (e.g. /v1/chat/completions, /v1/messages)
+	// so the control plane resolves path-scoped channels correctly. Metadata only.
+	Path     string `json:"path,omitempty"`
+	IsStream bool   `json:"is_stream"`
 }
 
 // SelectChannelResponse is the routing decision returned by the control plane.
@@ -101,13 +106,24 @@ func PeekRequest(body []byte) (model string, stream bool, err error) {
 	return p.Model, p.Stream, nil
 }
 
-// usagePeek captures only the token-count block from an upstream response.
+// usagePeek captures only the token-count block from an upstream response. It
+// understands BOTH the OpenAI shape (usage.prompt_tokens/completion_tokens) and
+// the Anthropic shape (usage.input_tokens/output_tokens, and message.usage.* on
+// the message_start stream frame). No content field is ever read.
 type usagePeek struct {
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
+		InputTokens      int `json:"input_tokens"`
+		OutputTokens     int `json:"output_tokens"`
 	} `json:"usage"`
+	Message struct {
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+		} `json:"usage"`
+	} `json:"message"`
 }
 
 // Usage holds the token counts extracted for billing. Metadata only.
@@ -118,21 +134,75 @@ type Usage struct {
 }
 
 // PeekUsage extracts token counts from a (non-stream) response body or a single
-// stream frame that carries a usage block. Returns ok=false if no usage present
-// (the caller keeps the last non-empty usage seen across stream frames).
+// stream frame that carries a usage block, for either OpenAI or Anthropic
+// shapes (input_tokens->prompt, output_tokens->completion). Returns ok=false if
+// no usage present. Anthropic splits input (message_start) and output
+// (message_delta) across frames, so a streaming caller must MERGE per field
+// across frames rather than replace (see streamThrough).
 func PeekUsage(chunk []byte) (u Usage, ok bool) {
 	var p usagePeek
 	if err := json.Unmarshal(chunk, &p); err != nil {
 		return Usage{}, false
 	}
-	if p.Usage.TotalTokens == 0 && p.Usage.PromptTokens == 0 && p.Usage.CompletionTokens == 0 {
+	prompt := p.Usage.PromptTokens
+	if prompt == 0 {
+		prompt = p.Usage.InputTokens
+	}
+	if prompt == 0 {
+		prompt = p.Message.Usage.InputTokens
+	}
+	completion := p.Usage.CompletionTokens
+	if completion == 0 {
+		completion = p.Usage.OutputTokens
+	}
+	if completion == 0 {
+		completion = p.Message.Usage.OutputTokens
+	}
+	total := p.Usage.TotalTokens
+	if prompt == 0 && completion == 0 && total == 0 {
 		return Usage{}, false
 	}
-	return Usage{
-		PromptTokens:     p.Usage.PromptTokens,
-		CompletionTokens: p.Usage.CompletionTokens,
-		TotalTokens:      p.Usage.TotalTokens,
-	}, true
+	if total == 0 {
+		total = prompt + completion
+	}
+	return Usage{PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total}, true
+}
+
+// EnsureStreamUsage returns body with stream_options.include_usage=true for an
+// OpenAI-style STREAMING request, so the upstream emits a final usage frame the
+// enclave can bill from (without it, streaming usage is absent and the request
+// would settle free). It parses only TOP-LEVEL keys — "messages"/prompt content
+// stay opaque json.RawMessage and are never materialized into a value — then
+// re-marshals. If body isn't a JSON object or stream isn't true, it is returned
+// unchanged. Call ONLY for the OpenAI relay format (Anthropic always reports
+// usage and has no stream_options field).
+func EnsureStreamUsage(body []byte) []byte {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(body, &top); err != nil {
+		return body
+	}
+	var stream bool
+	if raw, ok := top["stream"]; ok {
+		_ = json.Unmarshal(raw, &stream)
+	}
+	if !stream {
+		return body
+	}
+	so := map[string]json.RawMessage{}
+	if raw, ok := top["stream_options"]; ok {
+		_ = json.Unmarshal(raw, &so)
+	}
+	so["include_usage"] = json.RawMessage("true")
+	soBytes, err := json.Marshal(so)
+	if err != nil {
+		return body
+	}
+	top["stream_options"] = soBytes
+	out, err := json.Marshal(top)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 // settleJSONFields returns the json field names declared on SettleRequest. Used

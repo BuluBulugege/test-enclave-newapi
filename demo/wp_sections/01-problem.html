@@ -189,7 +189,7 @@
 
   <p>这三块基石的作用分别是：</p>
   <ul>
-    <li><strong>MRENCLAVE = 代码 + manifest 的度量</strong>（当前上线值 <code>e5c301b5f4256e086d9ea074e72da445d10a48323e5bc6139992ef995bd9b36a</code>）。它对 enclave 内的代码与配置做哈希，改动任意一字节，指纹即完全改变——等价于 Docker digest / git commit / 前端 SRI。</li>
+    <li><strong>MRENCLAVE = 代码 + manifest 的度量</strong>（当前上线值 <code>daed45e63bed1cfe430b2d2dfd414851fdff1fd409c94855171bf6f9ccc2be64</code>）。它对 enclave 内的代码与配置做哈希，改动任意一字节，指纹即完全改变——等价于 Docker digest / git commit / 前端 SRI。</li>
     <li><strong>Quote（远程认证凭证）</strong>由 CPU 出具、带 Intel 签名，通过 DCAP 验证签名链，证明「这是一块真的 SGX 芯片，此刻正在运行 MRENCLAVE 所标识的这份确切代码」。伪造不了。</li>
     <li><strong>RA-TLS 通道绑定</strong>把 <code>report_data</code> 固定为 <code>SHA-512(TLS SubjectPublicKeyInfo)</code>，即公钥指纹被写进被 Intel 签名的报告里。它保证「被认证的那个 enclave，就是你此刻正在通话的这个端点」，而不是被中间人转发或重放来的另一台。</li>
   </ul>

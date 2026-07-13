@@ -47,7 +47,7 @@ result as PARTIAL unless the chain is also verified.
 USAGE
 =====
     python3 verify_enclave.py --addr 8.217.148.82:8443 \
-        --mrenclave e5c301b5f4256e086d9ea074e72da445d10a48323e5bc6139992ef995bd9b36a
+        --mrenclave daed45e63bed1cfe430b2d2dfd414851fdff1fd409c94855171bf6f9ccc2be64
 
 Only the standard library is required for Checks 1 & 2. Check 3 (channel
 binding) additionally uses the `cryptography` package if available

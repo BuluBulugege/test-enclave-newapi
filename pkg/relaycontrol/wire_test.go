@@ -1,6 +1,9 @@
 package relaycontrol
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestPeekRequest(t *testing.T) {
 	// A realistic OpenAI body: prompt content lives in messages, which PeekRequest
@@ -44,6 +47,59 @@ func TestPeekUsageAbsent(t *testing.T) {
 	}
 	if _, ok := PeekUsage([]byte(`bad json`)); ok {
 		t.Fatal("expected no usage for invalid json")
+	}
+}
+
+// TestPeekUsageAnthropic covers the Anthropic shapes so Claude /official traffic
+// is not billed as free (the counts feed settleOfficialBilling).
+func TestPeekUsageAnthropic(t *testing.T) {
+	cases := []struct {
+		name             string
+		body             string
+		prompt, compl    int
+		total            int
+	}{
+		{"non-stream", `{"type":"message","usage":{"input_tokens":25,"output_tokens":7}}`, 25, 7, 32},
+		{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1}}}`, 25, 1, 26},
+		{"message_delta", `{"type":"message_delta","usage":{"output_tokens":40}}`, 0, 40, 40},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u, ok := PeekUsage([]byte(c.body))
+			if !ok {
+				t.Fatalf("expected usage present for %s", c.name)
+			}
+			if u.PromptTokens != c.prompt || u.CompletionTokens != c.compl || u.TotalTokens != c.total {
+				t.Fatalf("usage = %+v, want %d/%d/%d", u, c.prompt, c.compl, c.total)
+			}
+		})
+	}
+}
+
+// TestEnsureStreamUsage verifies the enclave injects stream_options.include_usage
+// for OpenAI streams (so usage is emitted + billable) without touching content,
+// and leaves non-stream / non-JSON bodies untouched.
+func TestEnsureStreamUsage(t *testing.T) {
+	// streaming request gains include_usage, model + messages preserved
+	out := EnsureStreamUsage([]byte(`{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	m, s, err := PeekRequest(out)
+	if err != nil || m != "gpt-4o" || !s {
+		t.Fatalf("PeekRequest(out) = %q/%v/%v", m, s, err)
+	}
+	if !strings.Contains(string(out), `"include_usage":true`) {
+		t.Fatalf("expected include_usage injected, got %s", out)
+	}
+	if !strings.Contains(string(out), `"content":"hi"`) {
+		t.Fatalf("message content must be preserved, got %s", out)
+	}
+	// non-stream request is returned unchanged (no stream_options added)
+	in := []byte(`{"model":"gpt-4o","messages":[]}`)
+	if got := EnsureStreamUsage(in); strings.Contains(string(got), "stream_options") {
+		t.Fatalf("non-stream body must not gain stream_options, got %s", got)
+	}
+	// non-JSON body is returned unchanged
+	if got := EnsureStreamUsage([]byte(`not json`)); string(got) != `not json` {
+		t.Fatalf("invalid body must pass through unchanged, got %s", got)
 	}
 }
 
