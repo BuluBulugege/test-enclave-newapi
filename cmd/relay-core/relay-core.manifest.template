@@ -1,0 +1,92 @@
+# Gramine manifest template for the SGX relay-core enclave.
+#
+# Security-critical settings for the two provable properties:
+#   - sgx.debug = false            → production enclave (distinct MRENCLAVE from
+#                                    the Phase-0 debug demo; a debug enclave is
+#                                    rejected by the client verifier).
+#   - remote_attestation = "dcap"  → the enclave can produce a real DCAP quote
+#                                    via /dev/attestation/*.
+#   - fs.mounts: ONLY an encrypted-EPC tmpfs for /tmp. NO writable host mount, no
+#                encrypted-files host mount, no allowed_files. So even a code bug
+#                that calls os.Create can only ever hit encrypted enclave memory,
+#                never the host disk. This is the runtime belt-and-suspenders for
+#                the "no content at rest" property.
+#
+# Rendered with gramine-manifest passing: ENTRYPOINT, ARCH_LIBDIR, upstream key,
+# listen addr. Signed with gramine-sgx-sign to produce .manifest.sgx + .sig,
+# whose MRENCLAVE is the value clients pin.
+
+libos.entrypoint = "{{ entrypoint }}"
+
+loader.entrypoint.uri = "file:{{ gramine.libos }}"
+loader.log_level = "error"
+
+# The Go binary is fully static-ish but still needs the loader; we run it directly.
+loader.argv = [ "{{ entrypoint }}" ]
+
+# Environment passed INTO the enclave. The upstream key is injected here for the
+# demo (decision 2 sealed-key store is a later refinement); it lives only in
+# enclave memory. TLS is served with the in-memory RA-TLS cert (no cert files).
+loader.env.LD_LIBRARY_PATH = "{{ arch_libdir }}:/usr/{{ arch_libdir }}"
+loader.env.RELAY_CORE_ADDR = "{{ listen_addr }}"
+loader.env.RELAY_CORE_DNSNAME = "{{ dnsname }}"
+loader.env.RELAY_CORE_UPSTREAM_KEY = { passthrough = true }
+# URL of the untrusted new-api control plane (loopback). Passthrough so the
+# operator points it at their new-api without changing MRENCLAVE.
+loader.env.RELAY_CORE_CONTROL_URL = { passthrough = true }
+loader.env.SSL_CERT_FILE = "/etc/ssl/certs/ca-certificates.crt"
+loader.env.SSL_CERT_DIR = "/etc/ssl/certs"
+
+loader.insecure__use_cmdline_argv = false
+loader.insecure__use_host_env = false
+
+# --- File system: read-only trusted binary + libs; encrypted tmpfs for /tmp ---
+fs.mounts = [
+  { uri = "file:{{ gramine.runtimedir() }}", path = "/lib" },
+  { uri = "file:{{ arch_libdir }}", path = "{{ arch_libdir }}" },
+  { uri = "file:/usr/{{ arch_libdir }}", path = "/usr/{{ arch_libdir }}" },
+  { uri = "file:/etc/ssl/certs", path = "/etc/ssl/certs" },
+  # The relay-core binary must be MOUNTED into the enclave FS view (not just
+  # listed as trusted), otherwise libos_init fails with ENOENT. entrypoint
+  # points at this in-enclave path.
+  { uri = "file:{{ entrypoint }}", path = "{{ entrypoint }}" },
+  # Encrypted upstream-key file: ciphertext lives on the host; Gramine decrypts
+  # it transparently in enclave memory. key_name "_sgx_mrenclave" uses the SGX
+  # sealing key DERIVED FROM MRENCLAVE (obtained in-enclave via
+  # /dev/attestation/keys/_sgx_mrenclave). The wrap key is NEVER in the manifest
+  # and CANNOT be derived by the host — only an enclave with this exact
+  # MRENCLAVE can decrypt the file. This satisfies decision 2 (host cannot read
+  # the upstream key) in hardware, with no insecure__keys.
+  { type = "encrypted", uri = "file:secrets_enc", path = "/secrets", key_name = "_sgx_mrenclave" },
+  # tmpfs is Gramine's in-enclave (encrypted EPC) filesystem. NOT backed by the
+  # host. Any write to /tmp stays in encrypted enclave memory and is gone at exit.
+  { type = "tmpfs", path = "/tmp" },
+]
+
+# --- SGX enclave configuration ---
+sgx.debug = false
+sgx.remote_attestation = "dcap"
+
+# Give the Go 1.26 runtime ample virtual address space for its page allocator
+# (a 1G enclave is borderline and can fail at startup with "failed to reserve
+# page summary memory"). Committed upfront in EPC (box has ~3.9GB EPC), so no
+# EDMM — EDMM's lazy per-page commit is too slow to boot on this 2-vCPU box.
+sgx.enclave_size = "2G"
+sgx.max_threads = 64
+
+# Trusted files are measured into MRENCLAVE. The relay-core binary + the loader
+# runtime + system libs it links. Any tampering changes MRENCLAVE → verifier
+# rejects.
+sgx.trusted_files = [
+  "file:{{ entrypoint }}",
+  "file:{{ gramine.libos }}",
+  "file:{{ gramine.runtimedir() }}/",
+  "file:{{ arch_libdir }}/",
+  "file:/usr/{{ arch_libdir }}/",
+  "file:/etc/ssl/certs/ca-certificates.crt",
+]
+
+# Network: relay-core must reach the official upstream (api.openai.com) and the
+# control plane. Gramine allows outbound TCP by default when the app dials; no
+# special declaration needed beyond the eventfd/socket support below.
+sys.enable_extra_runtime_domain_names_conf = true

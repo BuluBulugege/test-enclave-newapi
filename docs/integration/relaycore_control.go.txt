@@ -1,0 +1,103 @@
+package main
+
+import (
+	"net/http"
+
+	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/officialurls"
+)
+
+// This file wires new-api as the untrusted CONTROL PLANE for the SGX relay-core
+// enclave. relay-core (which terminates the client's RA-TLS connection and holds
+// the prompt) calls this endpoint over loopback to (1) authenticate the gateway
+// token, (2) pick a channel for the requested model, and (3) get the upstream
+// key. It receives ONLY {token, model} — never prompt/response content — and
+// returns routing metadata. It listens on 127.0.0.1 only and must never be
+// exposed publicly; it is deliberately outside the enclave trust boundary.
+
+type rcSelectReq struct {
+	Token string `json:"token"`
+	Model string `json:"model"`
+}
+
+type rcSelectResp struct {
+	ChannelID   int    `json:"channel_id"`
+	ChannelType int    `json:"channel_type"`
+	UpstreamKey string `json:"upstream_key"`
+	UserID      int    `json:"user_id"`
+	TokenID     int    `json:"token_id"`
+	IsOfficial  bool   `json:"is_official"`
+	Error       string `json:"error,omitempty"`
+}
+
+// StartRelayCoreControlPlane launches the loopback control-plane HTTP server in
+// a goroutine. Call it from main() after model.InitDB() and channel-cache init.
+func StartRelayCoreControlPlane(addr string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/internal/relaycore/select", handleRelayCoreSelect)
+	srv := &http.Server{Addr: addr, Handler: mux}
+	go func() {
+		common.SysLog("relay-core control plane listening on " + addr)
+		if err := srv.ListenAndServe(); err != nil {
+			common.SysLog("relay-core control plane stopped: " + err.Error())
+		}
+	}()
+}
+
+func handleRelayCoreSelect(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	var req rcSelectReq
+	if err := common.DecodeJson(r.Body, &req); err != nil {
+		writeRCResp(w, rcSelectResp{Error: "bad request"})
+		return
+	}
+	if req.Token == "" || req.Model == "" {
+		writeRCResp(w, rcSelectResp{Error: "token and model required"})
+		return
+	}
+
+	token, err := model.ValidateUserToken(req.Token)
+	if err != nil || token == nil {
+		writeRCResp(w, rcSelectResp{Error: "invalid gateway token"})
+		return
+	}
+
+	group := token.Group
+	if group == "" {
+		group = "default"
+	}
+
+	channel, err := model.GetRandomSatisfiedChannel(group, req.Model, 0, "/v1/chat/completions")
+	if err != nil || channel == nil {
+		writeRCResp(w, rcSelectResp{Error: "no channel for model " + req.Model + " in group " + group})
+		return
+	}
+
+	key, _, nerr := channel.GetNextEnabledKey()
+	if nerr != nil {
+		writeRCResp(w, rcSelectResp{Error: "no enabled upstream key on channel"})
+		return
+	}
+
+	isOfficial := officialurls.IsOfficialURL(channel.Type, channel.GetBaseURL()) && channel.GetSetting().Proxy == ""
+
+	writeRCResp(w, rcSelectResp{
+		ChannelID:   channel.Id,
+		ChannelType: channel.Type,
+		UpstreamKey: key,
+		UserID:      token.UserId,
+		TokenID:     token.Id,
+		IsOfficial:  isOfficial,
+	})
+}
+
+func writeRCResp(w http.ResponseWriter, resp rcSelectResp) {
+	b, err := common.Marshal(resp)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		return
+	}
+	_, _ = w.Write(b)
+}
