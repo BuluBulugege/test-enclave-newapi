@@ -66,6 +66,23 @@
   .pchip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer;background:#fff;color:var(--muted)}
   .pchip.on{background:var(--brand);color:#fff;border-color:var(--brand)}
   .ctrls{display:flex;gap:8px;margin-top:12px;align-items:center}
+  /* explainer */
+  .intro h3{margin:20px 0 10px;font-size:16px}
+  .concepts{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:720px){.concepts{grid-template-columns:1fr}}
+  .ccard{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fafbff}
+  .ccard .ic{font-size:22px}
+  .ccard b.t{display:block;margin:6px 0 4px;font-size:15px}
+  .ccard .desc{font-size:13.5px;color:var(--ink2)}
+  .ccard .an{font-size:12.5px;color:var(--muted);margin-top:9px;border-top:1px dashed var(--line);padding-top:8px}
+  .ccard .an b{color:var(--teal)}
+  .why{margin-top:16px;background:#eef6ff;border:1px solid #d6e6fb;border-radius:12px;padding:14px 16px;font-size:14px;color:#1b4f80;line-height:1.7}
+  .why b{color:#0d3a63}
+  .steps3{margin:10px 0 0;padding-left:20px}.steps3 li{margin:6px 0;color:var(--ink2);font-size:13.5px}
+  .boundary-key{display:flex;gap:16px;flex-wrap:wrap;font-size:13px;color:var(--muted);margin:10px 0 2px}
+  .boundary-key span{display:inline-flex;align-items:center;gap:6px}
+  .sw{width:26px;height:0;border-top:2px solid var(--ok)}
+  .sw.d{border-top:2px dashed var(--bad)}
 </style>
 </head>
 <body>
@@ -75,6 +92,44 @@
 </div></header>
 
 <div class="wrap">
+
+  <!-- explainer -->
+  <div class="step intro">
+    <h2>读我先 · 3 分钟搞懂这在干嘛</h2>
+    <p class="hint" style="font-size:14.5px">你把 prompt（可能含敏感数据）发给 AI 网关时，正常情况下运营方<b>能看见、能记录</b>你发的每一个字——你只能选择"相信"他们不这么做。这个演示把"相信"换成"<b>可验证</b>"：用硬件 + 密码学证明服务器<b>看不到也存不下</b>你的数据，并让你亲眼看到数据每一跳去了哪。</p>
+
+    <h3>先认识 3 个词（用你熟悉的东西类比）</h3>
+    <div class="concepts">
+      <div class="ccard">
+        <div class="ic">🔒</div>
+        <b class="t">Enclave（机密飞地）</b>
+        <div class="desc">CPU 里一块<b>硬件加密的隔离区</b>。程序在里面跑，它的内存连服务器的 root 管理员、连云厂商都看不到明文。</div>
+        <div class="an">类比：一个<b>连房东都打不开</b>的保险箱，你的程序在保险箱里运行。</div>
+      </div>
+      <div class="ccard">
+        <div class="ic">📜</div>
+        <b class="t">Quote（远程认证凭证）</b>
+        <div class="desc">CPU 出具的、带 <b>Intel 签名</b>的一句话：“我这块真芯片，此刻正在跑<b>这段确切的代码</b>”。</div>
+        <div class="an">类比：像 <b>HTTPS 证书</b>，但由 CPU 硬件 + Intel 背书，运营方<b>伪造不了</b>。</div>
+      </div>
+      <div class="ccard">
+        <div class="ic">🧬</div>
+        <b class="t">MRENCLAVE（代码指纹）</b>
+        <div class="desc">那段代码 + 配置的<b>哈希值</b>。改动一个字节，指纹就完全不同。</div>
+        <div class="an">类比：<b>Docker 镜像 digest</b> / <b>git commit 号</b> / 前端的 <b>SRI</b>。</div>
+      </div>
+    </div>
+
+    <div class="why">
+      <b>那"它没偷看你"到底是怎么被证明的？</b> 一条链子，缺一环就不成立：
+      <ol class="steps3">
+        <li>跑在 enclave 里的代码是<b>开源</b>的，任何人可读、可<b>重新编译</b>得到同一个指纹（MRENCLAVE）。</li>
+        <li>审计这份代码 ⇒ 确认它<b>根本没有把正文写盘/入库/记日志的代码</b>，且只连官方上游。</li>
+        <li>Quote 由 Intel 硬件签名，<b>证明服务器上跑的就是这份代码</b>（指纹对得上）。</li>
+        <li>⇒ 传递性地证明：这台服务器<b>做不到</b>偷看/留存你的 prompt——运营方想作恶就得改代码，一改指纹就变，你下面的"开始验证"当场会红。</li>
+      </ol>
+    </div>
+  </div>
 
   <!-- config -->
   <div class="step">
@@ -99,7 +154,7 @@
   <!-- step 2: visualize a request -->
   <div class="step">
     <h2><span class="n">②</span>看一次请求经历了什么</h2>
-    <p class="hint">点"发送并可视化"，逐跳看你的 prompt 去了哪。<b>重点看第 2 跳</b>：发给不可信 new-api 的那一跳里，有没有你的 prompt。</p>
+    <p class="hint">下面 4 个方框是数据流经的 4 个角色。<b>实线框 = 可信</b>（enclave / 官方上游 / 你自己）；<b>虚线框 = 不可信</b>（new-api 主体、宿主、云厂商）。整套设计的核心就是：<b>让你的 prompt 永远不跨过虚线框</b>。点"发送并可视化"，逐跳看每条边界上到底流过了什么数据——<b>重点看第 2 跳</b>（发给不可信 new-api 的那一跳里，有没有你的 prompt）。</p>
     <label>你的 prompt</label>
     <textarea id="prompt">你好，用一句话介绍你自己</textarea>
     <div class="row" style="margin-top:10px">
@@ -116,6 +171,10 @@
       <div class="node untrusted" data-node="new-api 控制面 (不可信)"><b>new-api 控制面</b><span>不可信 · 只见元数据</span></div>
       <div class="edge" data-edge="2">▶</div>
       <div class="node" data-node="OpenAI 官方"><b>OpenAI 官方</b><span>api.openai.com</span></div>
+    </div>
+    <div class="boundary-key">
+      <span><i class="sw"></i> 绿色边 = 加密 / 可信通道</span>
+      <span><i class="sw d"></i> 红色虚线边 = 跨越"不可信"边界（这里只应有元数据，绝无 prompt）</span>
     </div>
 
     <div class="stepbar" id="stepbar"></div>
