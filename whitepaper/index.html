@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>可验证的无日志 AI 网关 · 白皮书</title>
+<style>
+  :root{
+    --ink:#0f1222; --ink2:#3a3f5c; --muted:#6b7188;
+    --bg:#fbfbfe; --card:#ffffff; --line:#e6e7f0;
+    --brand:#4f46e5; --brand2:#0ea5a4; --ok:#16a34a; --warn:#d97706; --bad:#dc2626;
+    --code:#0b1020; --codeink:#d6e2ff;
+    --radius:16px; --maxw:980px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",Roboto,Helvetica,Arial,sans-serif;
+       color:var(--ink);background:var(--bg);line-height:1.65;font-size:16px}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
+  code,kbd,pre{font-family:"SF Mono",ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace}
+
+  /* hero */
+  header.hero{background:radial-gradient(1200px 500px at 20% -10%,#2a2f6b 0%,#12142e 55%,#0b0d20 100%);color:#fff;padding:70px 0 54px}
+  .badge{display:inline-block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;
+         background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.22);
+         padding:5px 12px;border-radius:999px;color:#c9cdf5}
+  h1{font-size:clamp(28px,5vw,46px);line-height:1.15;margin:18px 0 12px;font-weight:800;letter-spacing:-.01em}
+  .lede{font-size:clamp(17px,2.4vw,21px);color:#c7cbef;max-width:760px;margin:0}
+  .hero-cta{margin-top:26px;display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-block;padding:11px 18px;border-radius:12px;font-weight:600;text-decoration:none;font-size:15px}
+  .btn.primary{background:#fff;color:#15173a}
+  .btn.ghost{border:1px solid rgba(255,255,255,.3);color:#fff}
+  .kpis{margin-top:34px;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px}
+  .kpi{background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);border-radius:14px;padding:14px 16px}
+  .kpi b{display:block;font-size:22px;color:#fff}
+  .kpi span{font-size:13px;color:#aab0e0}
+
+  section{padding:52px 0;border-bottom:1px solid var(--line)}
+  h2{font-size:clamp(22px,3.4vw,30px);margin:0 0 6px;font-weight:800;letter-spacing:-.01em}
+  h2 .num{color:var(--brand);font-weight:800;margin-right:10px}
+  .sub{color:var(--muted);margin:0 0 26px;font-size:16px}
+  h3{font-size:18px;margin:22px 0 8px}
+  p{margin:0 0 14px;color:var(--ink2)}
+  .grid{display:grid;gap:16px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  @media(max-width:760px){.g2,.g3{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:20px 22px;box-shadow:0 1px 2px rgba(16,18,34,.03)}
+  .card h3{margin-top:0;display:flex;align-items:center;gap:9px}
+  .pill{font-size:12px;font-weight:700;padding:3px 9px;border-radius:999px}
+  .pill.ok{background:#e7f6ec;color:#146c2e}
+  .pill.no{background:#fdeaea;color:#a11}
+  .tag{display:inline-block;font-size:12.5px;color:var(--brand);background:#eef0fe;border:1px solid #dfe2fb;border-radius:8px;padding:2px 8px;margin-right:6px}
+
+  /* flow diagram */
+  .flow{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;align-items:center;gap:10px;margin:8px 0 6px}
+  @media(max-width:760px){.flow{grid-template-columns:1fr;gap:14px}.flow .arrow{transform:rotate(90deg)}}
+  .node{border-radius:14px;padding:14px;text-align:center;border:1.5px solid var(--line);background:#fff}
+  .node.enc{border-color:#c7c9f7;background:linear-gradient(180deg,#f4f5ff,#eef0fe)}
+  .node.host{border-style:dashed}
+  .node b{display:block;font-size:14px}
+  .node span{font-size:12px;color:var(--muted)}
+  .arrow{color:var(--brand);font-weight:800;font-size:20px;text-align:center}
+  .legend{font-size:13px;color:var(--muted);margin-top:10px}
+
+  table{width:100%;border-collapse:collapse;font-size:14.5px;margin:6px 0}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--ink);font-weight:700;background:#f6f7fb}
+  td .y{color:var(--ok);font-weight:700}
+  td .n{color:var(--bad);font-weight:700}
+
+  pre{background:var(--code);color:var(--codeink);border-radius:12px;padding:16px 18px;overflow:auto;font-size:13px;line-height:1.55}
+  pre .c{color:#7f8bbf}
+  pre .g{color:#7ee787}
+  pre .y{color:#ffd479}
+  .mono-inline{background:#f0f1f8;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:13px;word-break:break-all}
+
+  .callout{border-left:4px solid var(--warn);background:#fff9f0;padding:14px 18px;border-radius:0 12px 12px 0;color:#7a5310}
+  .callout.good{border-color:var(--ok);background:#f2fbf5;color:#12602c}
+  ul.clean{margin:6px 0 14px;padding-left:20px}ul.clean li{margin:6px 0;color:var(--ink2)}
+  footer{padding:40px 0 60px;color:var(--muted);font-size:14px}
+  .disclaimer{font-size:13px;color:var(--muted);border:1px dashed var(--line);border-radius:12px;padding:14px 16px;background:#fafbff}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="badge">机密计算 · 可验证 AI 基础设施 · 白皮书 v1</span>
+    <h1>可验证的无日志 AI 网关</h1>
+    <p class="lede">让"我们不看、不存你的 prompt"从一句<strong>承诺</strong>，变成用户在发送前就能亲自<strong>用密码学验证</strong>的<strong>数学事实</strong>。基于 Intel SGX 机密计算 + 远程认证，构建在开源 AI 网关 new-api 之上。</p>
+    <div class="hero-cta">
+      <a class="btn primary" href="#verify">如何验证（现场可跑）</a>
+      <a class="btn ghost" href="#how">工作原理</a>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><b>3</b><span>可对外证明的性质</span></div>
+      <div class="kpi"><b>~1,100</b><span>行可审计核心代码</span></div>
+      <div class="kpi"><b>0</b><span>核心第三方依赖</span></div>
+      <div class="kpi"><b>已上线</b><span>真实 SGX 硬件 + 公网可验证端点</span></div>
+    </div>
+  </div>
+</header>
+
+<section id="problem"><div class="wrap">
+  <h2><span class="num">01</span>问题</h2>
+  <p class="sub">今天所有 AI 网关 / 代理都能看见并记录你的每一条 prompt——你只能选择相信运营方。</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3>信任无法验证</h3>
+      <p>企业、医疗、金融、法律、政务、Web3 用户把敏感数据发给 AI 网关时，"我们不记录日志"只是一句市场话术。没有任何技术手段让用户<strong>验证</strong>服务器真的没读、没存、没转卖。</p>
+    </div>
+    <div class="card">
+      <h3>运营方可随时作恶或被攻破</h3>
+      <p>网关持有明文 prompt 和上游 API Key，可被内部人员、被入侵者、被合规传票、被恶意配置（把"官方渠道"偷偷指向中间人）获取。合规与隐私风险无法量化。</p>
+    </div>
+  </div>
+</div></section>
+
+<section id="solution"><div class="wrap">
+  <h2><span class="num">02</span>方案</h2>
+  <p class="sub">把 AI 请求的"请求→响应"热路径放进硬件加密的 SGX enclave；用户用远程认证，在发送任何 prompt 之前，先<strong>验证</strong>正在运行的代码。</p>
+  <p>信任从"相信运营方"转移到"相信 Intel 硬件签名 + 一份任何人都能重新编译比对的开源代码指纹"。运营方即使拿到 root、即使想作恶，也<strong>无处下手</strong>——一改代码，指纹（MRENCLAVE）就变，客户端当场拒绝。</p>
+  <div class="grid g3" style="margin-top:8px">
+    <div class="card"><h3>① 不存正文</h3><p>请求/响应正文全程只在 enclave 的加密内存里，绝不落盘、不入库、不进日志。可度量、可证明。</p></div>
+    <div class="card"><h3>② 官方防 MITM</h3><p>标记为"官方直连"的渠道，目的地 URL 编译进 enclave 并被度量；运营方无法把它偷偷改到中间人代理。</p></div>
+    <div class="card"><h3>③ 上游 Key 可不落宿主</h3><p>上游 API Key 可用 SGX 硬件封印，只有该 enclave 能解密，宿主只见密文。</p></div>
+  </div>
+</div></section>
+
+<section id="how"><div class="wrap">
+  <h2><span class="num">03</span>工作原理</h2>
+  <p class="sub">客户端连的是 enclave，不是网关主体；网关主体只当"元数据顾问"，永远看不到正文。</p>
+  <div class="flow">
+    <div class="node"><b>客户端</b><span>发 prompt 前先验 quote</span></div>
+    <div class="arrow">▶</div>
+    <div class="node enc"><b>SGX Enclave（relay-core）</b><span>RA-TLS 终止 · 加密内存转发 · 不落盘</span></div>
+    <div class="arrow">▶</div>
+    <div class="node"><b>官方上游</b><span>api.openai.com（严格 TLS）</span></div>
+  </div>
+  <div class="flow" style="grid-template-columns:1fr auto 1fr;max-width:640px;margin:4px auto 0">
+    <div></div>
+    <div class="arrow" style="transform:rotate(90deg)">▲</div>
+    <div></div>
+  </div>
+  <div class="flow" style="grid-template-columns:1fr;max-width:640px;margin:0 auto">
+    <div class="node host"><b>new-api 主体（不可信 / 可闭源）</b><span>只回答"用哪个渠道 / 扣多少 token"——只见元数据，永不见 prompt</span></div>
+  </div>
+  <p class="legend">虚线框 = 信任边界之外。客户端"验 quote"这一步本身就证明了它连的是真 enclave 而非网关主体——因为网关主体造不出有效的 Intel 签名 quote。</p>
+
+  <h3 style="margin-top:26px">证明链（为什么结论被"逼"出来）</h3>
+  <table>
+    <tr><th>环节</th><th>做什么</th><th>保证</th></tr>
+    <tr><td>远程认证 quote</td><td>SGX CPU 产出一份描述"正在运行的确切代码"的签名声明</td><td>链到 Intel 根 CA，运营方伪造不了</td></tr>
+    <tr><td>MRENCLAVE 比对</td><td>quote 里的代码指纹 = 你重新编译开源代码得到的指纹</td><td>运行的就是那份"无落盘 / 官方 URL"的审计代码</td></tr>
+    <tr><td>通道绑定</td><td>quote 内嵌 enclave TLS 公钥的哈希</td><td>你连的这条 TLS 就是被认证的 enclave（防转发）</td></tr>
+    <tr><td>可复现构建</td><td>任何人按源码重建得到同一 MRENCLAVE</td><td>指纹 ↔ 源码，无需信任发布者</td></tr>
+  </table>
+</div></section>
+
+<section id="verify"><div class="wrap">
+  <h2><span class="num">04</span>现场验证（任何人可跑）</h2>
+  <p class="sub">这不是幻灯片。下面的端点跑在真实的 Intel SGX 硬件上，任何人都能独立验证。</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3>公开可验证端点</h3>
+      <p>端点：<span class="mono-inline">https://8.217.148.82:8443</span></p>
+      <p>期望 MRENCLAVE：<br><span class="mono-inline">38cc4a089871e1168d7befa0cae3279ee514f2512e70db78c1b890827b30ec5a</span></p>
+      <p>开源仓库：<span class="mono-inline">github.com/BuluBulugege/test-enclave-newapi</span></p>
+    </div>
+    <div class="card">
+      <h3>三步验证（发 prompt 之前）</h3>
+      <ul class="clean">
+        <li><strong>Check 1</strong> 取回 quote（描述运行中的确切代码）</li>
+        <li><strong>Check 2</strong> MRENCLAVE == 你独立重建得到的指纹</li>
+        <li><strong>Check 3</strong> quote 绑定到这条 TLS 通道（防转发）</li>
+        <li><strong>+ DCAP 链</strong> 验证 quote 由 Intel 签名（杜绝伪造）</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>用 Python 验证器</h3>
+<pre><span class="c"># 纯标准库即可跑 Check 1/2；Check 3 需 pip install cryptography</span>
+python3 verify_enclave.py --addr 8.217.148.82:8443 \
+  --mrenclave 38cc4a089871e1168d7befa0cae3279ee514f2512e70db78c1b890827b30ec5a</pre>
+
+  <h3>真实输出（对上线端点跑出）</h3>
+<pre>Verifying enclave at 8.217.148.82:8443
+
+<span class="g">✓ Check 1</span> quote obtained (4734 bytes) and parsed
+<span class="g">✓ Check 2</span> MRENCLAVE matches the pinned value
+    38cc4a089871e1168d7befa0cae3279ee514f2512e70db78c1b890827b30ec5a
+<span class="g">✓ Check 3</span> quote is bound to THIS TLS channel (report_data == SHA-512(server pubkey))
+
+<span class="g">RESULT: PARTIAL PASS (structure + MRENCLAVE + channel binding)</span>
+<span class="y">  为完整保证，另跑 DCAP 签名链验证：relay-verify ... -dcap-verify</span></pre>
+
+  <div class="callout good" style="margin-top:8px"><strong>反例也成立：</strong>故意传入错误的 MRENCLAVE，验证器立即 <code>✗ Check 2 FAILED — MRENCLAVE MISMATCH</code> 并拒绝。伪造的 quote 会在 DCAP 链验证处被拒。</div>
+</div></section>
+
+<section id="trust"><div class="wrap">
+  <h2><span class="num">05</span>信任模型</h2>
+  <p class="sub">诚实地划出：什么被信任、什么明确在信任之外。</p>
+  <table>
+    <tr><th>组件</th><th>是否在可信基（TCB）内</th></tr>
+    <tr><td>Intel SGX 硬件 + 微码、DCAP 认证</td><td class="y">是（根信任）</td></tr>
+    <tr><td>relay-core enclave 代码（开源 + 可复现）</td><td class="y">是（可审计，~1100 行）</td></tr>
+    <tr><td>客户端验证器</td><td class="y">是（用户自持 / 可审计）</td></tr>
+    <tr><td>new-api 主体、宿主 OS、数据库、运营方</td><td class="n">否（明确不可信）</td></tr>
+    <tr><td>云厂商 / hypervisor</td><td class="n">否（看不到 enclave 内存明文）</td></tr>
+  </table>
+</div></section>
+
+<section id="market"><div class="wrap">
+  <h2><span class="num">06</span>市场与时机</h2>
+  <p class="sub">AI 隐私焦虑达到顶点，机密计算刚好成熟——两条曲线在此交汇。</p>
+  <div class="grid g3">
+    <div class="card"><h3>目标客户</h3><p>受监管行业的 AI 使用：医疗、金融、法律、政务、跨境数据、以及 Web3 / 加密原生场景。</p></div>
+    <div class="card"><h3>为什么是现在</h3><p>SGX/TDX 已在 Azure、GCP、阿里云普及；远程认证工具链成熟；企业对"AI 会不会偷看我的数据"的顾虑空前强烈。</p></div>
+    <div class="card"><h3>护城河</h3><p>可复现构建 + 链上可发布的度量值 + 与 40+ 上游 provider 的 new-api 生态整合；"可验证"本身即差异化。</p></div>
+  </div>
+  <p style="margin-top:16px">商业化路径：面向企业的"可证明无日志"AI 网关（私有部署 / SaaS）、可验证推理审计、以及与 Web3 结算结合的去信任 AI 市场。</p>
+</div></section>
+
+<section id="status"><div class="wrap">
+  <h2><span class="num">07</span>现状与诚实的边界</h2>
+  <p class="sub">我们只讲能被验证的事实，并明确标出尚未闭合的部分。</p>
+  <div class="grid g2">
+    <div class="card">
+      <h3><span class="pill ok">已实现</span></h3>
+      <ul class="clean">
+        <li>relay-core 在真实生产 enclave 内运行（<code>sgx.debug=false</code>），产出真 DCAP quote</li>
+        <li>公网端点 + Python/Go 客户端验证器（含 DCAP 签名链验证）</li>
+        <li>无落盘正文的 CI 门禁 + 只挂加密内存的 manifest</li>
+        <li>可复现构建：核心 Go 二进制两次编译字节一致、零外部依赖</li>
+        <li>与 new-api 真实集成：真实用户 / 真实令牌 / 官方渠道，端到端打到真 OpenAI</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3><span class="pill no">尚未闭合</span></h3>
+      <ul class="clean">
+        <li>研究原型，<strong>尚未经第三方安全审计</strong></li>
+        <li>客户端<strong>必须真的验证</strong>才有保证；SGX 存在已知的微架构侧信道研究性弱点</li>
+        <li>canonical 可复现构建需固定基础镜像 digest 与系统库版本</li>
+        <li>本演示出口在受 OpenAI 地域限制的区域（不影响链路正确性）</li>
+      </ul>
+    </div>
+  </div>
+  <div class="disclaimer" style="margin-top:18px">
+    本白皮书用于技术与投资沟通。系统基于开源项目 <strong>new-api（QuantumNous）</strong>构建并保留其署名与许可。文中"可验证 / 可证明"均指：在客户端执行远程认证与度量比对的前提下成立；不构成对任何绝对安全性的保证。
+  </div>
+</div></section>
+
+<footer><div class="wrap">
+  可验证的无日志 AI 网关 · 白皮书 v1 ·
+  端点 <span class="mono-inline">8.217.148.82:8443</span> ·
+  MRENCLAVE <span class="mono-inline">38cc4a08…7b30ec5a</span> ·
+  <span class="mono-inline">github.com/BuluBulugege/test-enclave-newapi</span>
+</div></footer>
+
+</body>
+</html>
