@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>可视化演示 · 一次 AI 请求经历了什么 & 怎么验证</title>
+<style>
+  :root{
+    --ink:#0f1222;--ink2:#3a3f5c;--muted:#6b7188;--bg:#f5f6fb;--card:#fff;--line:#e6e7f0;
+    --brand:#4f46e5;--teal:#0ea5a4;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;
+    --code:#0b1020;--codeink:#d6e2ff;--radius:14px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",Roboto,Arial,sans-serif;
+       color:var(--ink);background:var(--bg);line-height:1.6}
+  .wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+  code,pre,.mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace}
+  header{background:linear-gradient(120deg,#1a1c40,#0e1030);color:#fff;padding:34px 0 28px}
+  h1{margin:0 0 6px;font-size:26px;font-weight:800}
+  header p{margin:0;color:#c4c8ef;font-size:15px}
+  .step{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px;margin:22px 0;box-shadow:0 1px 2px rgba(16,18,34,.04)}
+  .step h2{margin:0 0 4px;font-size:20px}
+  .step h2 .n{color:var(--brand);margin-right:8px}
+  .step .hint{color:var(--muted);font-size:14px;margin:0 0 16px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  label{font-size:13px;color:var(--muted);display:block;margin:0 0 4px}
+  input,textarea,select{font:inherit;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:#fff;color:var(--ink);width:100%}
+  textarea{min-height:52px;resize:vertical}
+  .btn{background:var(--brand);color:#fff;border:0;border-radius:10px;padding:10px 18px;font-weight:700;cursor:pointer;font-size:15px}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.sec{background:#eef0fe;color:var(--brand)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:720px){.grid2{grid-template-columns:1fr}}
+  .muted{color:var(--muted);font-size:13px}
+  .mono-inline{background:#eef0f7;border:1px solid var(--line);border-radius:6px;padding:1px 6px;font-size:12.5px;word-break:break-all}
+
+  /* checks */
+  .check{display:flex;gap:12px;align-items:flex-start;padding:12px;border:1px solid var(--line);border-radius:12px;margin:10px 0;background:#fafbff}
+  .dot{width:26px;height:26px;border-radius:50%;flex:0 0 26px;display:grid;place-items:center;font-weight:800;color:#fff;background:#c3c7d6}
+  .dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}.dot.run{background:var(--brand);animation:pulse 1s infinite}
+  @keyframes pulse{50%{opacity:.5}}
+  .check b{font-size:15px}.check .d{font-size:13.5px;color:var(--ink2)}.check .p{font-size:13px;color:var(--muted);margin-top:2px}
+
+  /* flow diagram */
+  .flow{display:flex;align-items:stretch;gap:0;margin:6px 0 4px;overflow-x:auto;padding-bottom:6px}
+  .node{flex:1;min-width:150px;border:1.5px solid var(--line);border-radius:12px;padding:12px;text-align:center;background:#fff;transition:.25s}
+  .node.untrusted{border-style:dashed}
+  .node.active{border-color:var(--brand);box-shadow:0 0 0 4px #e5e7ff;transform:translateY(-2px)}
+  .node b{display:block;font-size:14px}.node span{font-size:11.5px;color:var(--muted)}
+  .edge{flex:0 0 34px;display:grid;place-items:center;color:#c3c7d6;font-size:20px;font-weight:800}
+  .edge.active{color:var(--brand)}
+  .edge.active.insecure{color:var(--bad)}
+
+  /* boundary panel */
+  .panel{border:1px solid var(--line);border-radius:12px;margin-top:14px;overflow:hidden}
+  .panel .head{padding:10px 14px;font-weight:700;font-size:14px;display:flex;justify-content:space-between;align-items:center}
+  .panel.secure .head{background:#eafaf0;color:#12602c}
+  .panel.insecure .head{background:#fdeeee;color:#9a1616}
+  .panel .lock{font-size:12px;font-weight:700;padding:2px 8px;border-radius:999px}
+  .panel.secure .lock{background:#cdeed8;color:#12602c}
+  .panel.insecure .lock{background:#f6d2d2;color:#9a1616}
+  .panel .note{padding:10px 14px;font-size:13.5px;color:var(--ink2);border-bottom:1px solid var(--line)}
+  .panel .note.key{background:#fff7ed;color:#8a4b08;font-weight:600}
+  pre{background:var(--code);color:var(--codeink);margin:0;padding:12px 14px;overflow:auto;font-size:12.5px;max-height:260px}
+  .stepbar{display:flex;gap:6px;margin-top:12px;flex-wrap:wrap}
+  .pchip{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;cursor:pointer;background:#fff;color:var(--muted)}
+  .pchip.on{background:var(--brand);color:#fff;border-color:var(--brand)}
+  .ctrls{display:flex;gap:8px;margin-top:12px;align-items:center}
+</style>
+</head>
+<body>
+<header><div class="wrap">
+  <h1>一次 AI 请求经历了什么 · 怎么验证它没偷看你</h1>
+  <p>连的是真实运行在 Intel SGX 上的 enclave。两个按钮，看懂：① 怎么验证这台是真 enclave；② 你的 prompt 在每一跳到底去了哪。</p>
+</div></header>
+
+<div class="wrap">
+
+  <!-- config -->
+  <div class="step">
+    <div class="grid2">
+      <div><label>enclave 端点</label><input id="endpoint" readonly></div>
+      <div><label>期望 MRENCLAVE（代码指纹，你 pin 的值）</label><input id="mre" readonly></div>
+    </div>
+    <div class="grid2" style="margin-top:10px">
+      <div><label>网关 token（粘贴你的，或在服务器端设 RELAY_DEMO_TOKEN）</label><input id="token" placeholder="例如 9wFTZQEJ..."></div>
+      <div><label>模型</label><input id="model" value="gpt-4o-mini"></div>
+    </div>
+  </div>
+
+  <!-- step 1: verify -->
+  <div class="step">
+    <h2><span class="n">①</span>先验证：这台是不是真 enclave？</h2>
+    <p class="hint">发任何 prompt 之前，客户端先做三项检查——把"相信运营方"换成"相信 Intel 硬件签名 + 你能自己重建的代码指纹"。</p>
+    <button class="btn" id="btnVerify">开始验证</button>
+    <div id="checks" style="margin-top:14px"></div>
+  </div>
+
+  <!-- step 2: visualize a request -->
+  <div class="step">
+    <h2><span class="n">②</span>看一次请求经历了什么</h2>
+    <p class="hint">点"发送并可视化"，逐跳看你的 prompt 去了哪。<b>重点看第 2 跳</b>：发给不可信 new-api 的那一跳里，有没有你的 prompt。</p>
+    <label>你的 prompt</label>
+    <textarea id="prompt">你好，用一句话介绍你自己</textarea>
+    <div class="row" style="margin-top:10px">
+      <button class="btn" id="btnChat">发送并可视化</button>
+      <span class="muted" id="chatStatus"></span>
+    </div>
+
+    <!-- flow diagram -->
+    <div class="flow" id="flow" style="margin-top:18px">
+      <div class="node" data-node="你 (客户端)"><b>你 (客户端)</b><span>发 prompt</span></div>
+      <div class="edge" data-edge="0">▶</div>
+      <div class="node" data-node="SGX Enclave"><b>SGX Enclave</b><span>加密内存 · 不落盘</span></div>
+      <div class="edge" data-edge="1">▶</div>
+      <div class="node untrusted" data-node="new-api 控制面 (不可信)"><b>new-api 控制面</b><span>不可信 · 只见元数据</span></div>
+      <div class="edge" data-edge="2">▶</div>
+      <div class="node" data-node="OpenAI 官方"><b>OpenAI 官方</b><span>api.openai.com</span></div>
+    </div>
+
+    <div class="stepbar" id="stepbar"></div>
+    <div id="panel"></div>
+    <div class="ctrls" id="ctrls" style="display:none">
+      <button class="btn sec" id="prev">← 上一步</button>
+      <button class="btn sec" id="next">下一步 →</button>
+      <button class="btn sec" id="auto">▶ 自动播放</button>
+    </div>
+  </div>
+
+  <p class="muted" style="margin:20px 0 40px">
+    说明：本页做的是"度量比对 + 通道绑定 + 真实转发"。完整杜绝伪造 quote 还需 DCAP 签名链验证
+    <span class="mono-inline">relay-verify -dcap-verify</span>。403 = 香港地域封锁（=到达真官方 OpenAI）。
+  </p>
+</div>
+
+<script>
+// ---------- helpers ----------
+const $ = s => document.querySelector(s);
+const j = o => JSON.stringify(o, null, 2);
+async function api(path, opts){ const r = await fetch(path, opts); return r.json(); }
+
+let TRACE = [], cur = 0, timer = null;
+
+// ---------- load config ----------
+(async () => {
+  const c = await api('/api/config');
+  $('#endpoint').value = c.endpoint;
+  $('#mre').value = c.expected_mrenclave;
+  if (c.has_default_token) $('#token').placeholder = '服务器已配置默认 token（可留空）';
+})();
+
+// ---------- step 1: verify ----------
+$('#btnVerify').onclick = async () => {
+  const box = $('#checks'); box.innerHTML = '';
+  const names = ['结构 & 活性', '度量比对 (MRENCLAVE)', '通道绑定'];
+  const rows = names.map((nm,i) => {
+    const el = document.createElement('div'); el.className = 'check';
+    el.innerHTML = `<div class="dot run">…</div><div><b>Check ${i+1} · ${nm}</b>
+      <div class="d">验证中…</div></div>`;
+    box.appendChild(el); return el;
+  });
+  $('#btnVerify').disabled = true;
+  try {
+    const res = await api('/api/verify');
+    res.checks.forEach(c => {
+      const el = rows[c.id-1]; const dot = el.querySelector('.dot');
+      dot.className = 'dot ' + (c.ok===true?'ok':c.ok===false?'bad':'');
+      dot.textContent = c.ok===true?'✓':c.ok===false?'✗':'—';
+      el.querySelector('div:last-child').innerHTML =
+        `<b>Check ${c.id} · ${c.name}</b><div class="d">${c.detail}</div>
+         ${c.plain?`<div class="p">💡 ${c.plain}</div>`:''}
+         ${c.value?`<div class="p mono" style="word-break:break-all">${c.value}</div>`:''}`;
+    });
+    const verdict = document.createElement('div'); verdict.className='check';
+    verdict.style.background = res.ok ? '#f2fbf5' : '#fff7ed';
+    verdict.innerHTML = `<div class="dot ${res.ok?'ok':''}">${res.ok?'✓':'!'}</div>
+      <div><b>${res.ok?'通过：可以放心发 prompt 了':'部分通过'}</b>
+      <div class="p">${res.note}</div></div>`;
+    box.appendChild(verdict);
+  } catch(e){ box.innerHTML = '<div class="check"><div class="dot bad">✗</div><div><b>验证失败</b><div class="d">'+e+'</div></div></div>'; }
+  $('#btnVerify').disabled = false;
+};
+
+// ---------- step 2: visualize a chat ----------
+$('#btnChat').onclick = async () => {
+  stopAuto();
+  $('#btnChat').disabled = true; $('#chatStatus').textContent = '发送中…';
+  try {
+    const res = await api('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: j({prompt: $('#prompt').value, token: $('#token').value, model: $('#model').value})});
+    TRACE = res.trace || [];
+    $('#chatStatus').textContent = res.error ? ('注意：'+res.error) : ('上游 HTTP '+res.status+(res.status===403?'（香港地域封锁，已到达真 OpenAI）':''));
+    buildStepbar(); cur = 0; renderStep(0); $('#ctrls').style.display='flex';
+  } catch(e){ $('#chatStatus').textContent = '失败：'+e; }
+  $('#btnChat').disabled = false;
+};
+
+function buildStepbar(){
+  const bar = $('#stepbar'); bar.innerHTML='';
+  TRACE.forEach((t,i)=>{ const c=document.createElement('span'); c.className='pchip'; c.textContent='第'+t.step+'跳';
+    c.onclick=()=>{cur=i;renderStep(i)}; bar.appendChild(c); });
+}
+
+function renderStep(i){
+  cur = i;
+  document.querySelectorAll('.pchip').forEach((c,k)=>c.classList.toggle('on',k===i));
+  // highlight nodes/edges
+  const t = TRACE[i];
+  document.querySelectorAll('.node').forEach(n=>n.classList.toggle('active',
+     n.dataset.node===t.frm || n.dataset.node===t.to));
+  document.querySelectorAll('.edge').forEach(e=>e.classList.remove('active','insecure'));
+  // pick the edge between frm and to (best-effort by index of the untrusted hop)
+  const order=['你 (客户端)','SGX Enclave','new-api 控制面 (不可信)','OpenAI 官方'];
+  const a=order.indexOf(t.frm), b=order.indexOf(t.to);
+  if(a>=0&&b>=0){ const ei=Math.min(a,b); const edge=document.querySelector('.edge[data-edge="'+ei+'"]');
+    if(edge){edge.classList.add('active'); if(!t.secure) edge.classList.add('insecure');} }
+  // panel
+  const p = $('#panel');
+  p.innerHTML = `<div class="panel ${t.secure?'secure':'insecure'}">
+     <div class="head">${t.frm} → ${t.to}
+       <span class="lock">${t.secure?'🔒 加密/可信通道':'⚠ 不可信边界'}</span></div>
+     <div class="note ${t.step===2?'key':''}">${t.step===2?'★ ':''}${t.title}<br><span class="muted">${t.note}</span></div>
+     <pre>${escapeHtml(j(t.data))}</pre></div>`;
+}
+function escapeHtml(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+$('#prev').onclick=()=>renderStep(Math.max(0,cur-1));
+$('#next').onclick=()=>renderStep(Math.min(TRACE.length-1,cur+1));
+$('#auto').onclick=function(){ if(timer){stopAuto();return;} this.textContent='⏸ 暂停';
+  timer=setInterval(()=>{ if(cur>=TRACE.length-1){stopAuto();return;} renderStep(cur+1); },1600); };
+function stopAuto(){ if(timer){clearInterval(timer);timer=null;} $('#auto').textContent='▶ 自动播放'; }
+</script>
+</body>
+</html>
