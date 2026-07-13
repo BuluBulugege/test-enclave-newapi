@@ -37,7 +37,7 @@ from pydantic import BaseModel
 ENCLAVE_ADDR = os.getenv("ENCLAVE_ADDR", "8.217.148.82:8443")
 EXPECTED_MRENCLAVE = os.getenv(
     "EXPECTED_MRENCLAVE",
-    "38cc4a089871e1168d7befa0cae3279ee514f2512e70db78c1b890827b30ec5a",
+    "e5c301b5f4256e086d9ea074e72da445d10a48323e5bc6139992ef995bd9b36a",
 ).lower()
 DEFAULT_TOKEN = os.getenv("RELAY_DEMO_TOKEN", "")  # never hard-code a secret
 

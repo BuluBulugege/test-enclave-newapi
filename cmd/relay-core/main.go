@@ -99,8 +99,10 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 	// 4. ENFORCE property (2): re-derive officiality inside the enclave. We do NOT
 	//    trust sel.IsOfficial blindly. For an official channel we build the URL
 	//    from the compiled-in table and use the strict-TLS client.
-	if !officialurls.HasOfficial(sel.ChannelType) {
-		writeError(w, http.StatusBadRequest, "demo v1 supports official channels only")
+	profile, ok := officialurls.ProfileFor(sel.ChannelType)
+	if !officialurls.HasOfficial(sel.ChannelType) || !ok {
+		writeError(w, http.StatusBadRequest,
+			"this provider is not a vetted official upstream in the enclave")
 		return
 	}
 	upstreamURL, err := officialUpstreamURL(sel.ChannelType, r.URL.Path)
@@ -120,8 +122,10 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. Dispatch upstream + stream response through, counting usage in memory.
+	//    The per-provider profile decides how the upstream credential is injected
+	//    (Bearer / x-api-key / x-goog-api-key + any required headers).
 	start := h.nowMilli()
-	usage, status, err := h.forward(ctx, w, upstreamURL, body, apiKey, isStream)
+	usage, status, err := h.forward(ctx, w, upstreamURL, body, apiKey, isStream, profile)
 	latency := h.nowMilli() - start
 	if err != nil {
 		// Do NOT log the upstream error body (leak site). Relay a generic error.

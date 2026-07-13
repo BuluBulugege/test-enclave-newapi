@@ -165,7 +165,7 @@
     <div class="card">
       <h3>公开可验证端点</h3>
       <p>端点：<span class="mono-inline">https://8.217.148.82:8443</span></p>
-      <p>期望 MRENCLAVE：<br><span class="mono-inline">38cc4a089871e1168d7befa0cae3279ee514f2512e70db78c1b890827b30ec5a</span></p>
+      <p>期望 MRENCLAVE：<br><span class="mono-inline">e5c301b5f4256e086d9ea074e72da445d10a48323e5bc6139992ef995bd9b36a</span></p>
       <p>开源仓库：<span class="mono-inline">github.com/BuluBulugege/test-enclave-newapi</span></p>
     </div>
     <div class="card">
@@ -182,14 +182,14 @@
   <h3>用 Python 验证器</h3>
 <pre><span class="c"># 纯标准库即可跑 Check 1/2；Check 3 需 pip install cryptography</span>
 python3 verify_enclave.py --addr 8.217.148.82:8443 \
-  --mrenclave 38cc4a089871e1168d7befa0cae3279ee514f2512e70db78c1b890827b30ec5a</pre>
+  --mrenclave e5c301b5f4256e086d9ea074e72da445d10a48323e5bc6139992ef995bd9b36a</pre>
 
   <h3>真实输出（对上线端点跑出）</h3>
 <pre>Verifying enclave at 8.217.148.82:8443
 
 <span class="g">✓ Check 1</span> quote obtained (4734 bytes) and parsed
 <span class="g">✓ Check 2</span> MRENCLAVE matches the pinned value
-    38cc4a089871e1168d7befa0cae3279ee514f2512e70db78c1b890827b30ec5a
+    e5c301b5f4256e086d9ea074e72da445d10a48323e5bc6139992ef995bd9b36a
 <span class="g">✓ Check 3</span> quote is bound to THIS TLS channel (report_data == SHA-512(server pubkey))
 
 <span class="g">RESULT: PARTIAL PASS (structure + MRENCLAVE + channel binding)</span>
@@ -254,7 +254,7 @@ python3 verify_enclave.py --addr 8.217.148.82:8443 \
 <footer><div class="wrap">
   可验证的无日志 AI 网关 · 白皮书 v1 ·
   端点 <span class="mono-inline">8.217.148.82:8443</span> ·
-  MRENCLAVE <span class="mono-inline">38cc4a08…7b30ec5a</span> ·
+  MRENCLAVE <span class="mono-inline">e5c301b5…5bd9b36a</span> ·
   <span class="mono-inline">github.com/BuluBulugege/test-enclave-newapi</span>
 </div></footer>
 

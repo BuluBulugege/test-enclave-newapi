@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/QuantumNous/new-api/pkg/officialurls"
 	"github.com/QuantumNous/new-api/pkg/relaycontrol"
 )
 
@@ -46,13 +47,20 @@ func (h *relayHandler) forward(
 	body []byte,
 	apiKey string,
 	isStream bool,
+	profile officialurls.UpstreamProfile,
 ) (relaycontrol.Usage, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		return relaycontrol.Usage{}, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
+	// Inject the upstream credential the way THIS provider expects (Bearer /
+	// x-api-key / x-goog-api-key), per the compiled-in official profile. The
+	// client's inbound gateway token is never forwarded upstream.
+	req.Header.Set(profile.AuthHeader, profile.AuthPrefix+apiKey)
+	for k, v := range profile.ExtraHeaders {
+		req.Header.Set(k, v)
+	}
 	if isStream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
