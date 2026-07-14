@@ -44,17 +44,33 @@ build uses a throwaway key and any rebuilder gets the same M.
 
 ## 1. Release record
 
+> **Build provenance (READ THIS).** This release's artifacts were produced by an
+> ON-HOST build on the SGX server (Docker is not installed there): the relay-core
+> ELF was compiled with the SAME flags the canonical `Dockerfile.reproducible`
+> uses (`CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -buildvcs=false
+> -mod=readonly` at the fixed entrypoint `/app/relay-core`), then rendered + signed
+> with the host's `gramine-manifest`/`gramine-sgx-sign` (Gramine 1.9, Ubuntu 24.04
+> libs). The **relay-core ELF is byte-reproducible** (pure-Go static, no external
+> modules) — a Docker build with the same Go image yields the same `relay_core_elf_sha256`.
+> The **Gramine loader + `/lib/x86_64-linux-gnu/*` + CA-bundle** measured surface,
+> however, was taken from the SGX host, NOT from the pinned Ubuntu image digest, so
+> a hermetic `Dockerfile.reproducible` rebuild MAY yield a slightly different
+> MRENCLAVE if the host's Gramine/libc bytes differ from the image's. The value
+> clients actually pin is the LIVE, DCAP-attested MRENCLAVE below (verified end to
+> end). Running the Docker build to independently reproduce this MRENCLAVE is the
+> recommended cross-check and is tracked as follow-up.
+
 ```yaml
 # ---- identity ----
 relaycore_component:  "relay-core"           # cmd/relay-core SGX enclave
-release_version:      "<e.g. 1.0.0>"         # matches the VERSION file at the tag (empty today)
-git_commit:           "<full 40-char SHA>"   # e.g. ca50b943736911d80b6c1febd1f0746d7fbbe73b
-git_tag:              "<e.g. relay-core-v1.0.0>"   # SIGNED tag (git tag -s)
-repo_clone_url:       "<git remote used for this fork>"   # informational; module path is github.com/QuantumNous/new-api
+release_version:      "1.0.0"                # first published record; multi-endpoint /official relay
+git_commit:           "84fde33807049ae412034a196898d9755d8a223c"   # public repo source that produces this MRENCLAVE
+git_tag:              "relay-core-v1.0.0"    # SUGGESTED; create as a SIGNED tag: git tag -s relay-core-v1.0.0
+repo_clone_url:       "https://github.com/BuluBulugege/test-enclave-newapi.git"   # module path stays github.com/QuantumNous/new-api
 
 # ---- THE value third parties pin ----
-mrenclave:            "<64 hex chars / 32 bytes>"   # authoritative enclave identity — PIN THIS
-mrsigner:             "<64 hex chars>"        # informational only; rotatable (see §5). Do NOT pin as primary.
+mrenclave:            "ba0d8c8065a24fa677e323af3ad7ba9ac615ba5aef042d0ac2c2cdf9b354eb8e"   # authoritative — PIN THIS (live, DCAP-attested)
+mrsigner:             "c2fc1db1d456bb8afbd57e6935f90de0a5cd3927867aba01ea01a99676be8652"   # informational only; rotatable (see §5). Do NOT pin as primary.
 isv_prod_id:          0
 isv_svn:              0
 sgx_debug:            false                   # PRODUCTION. A debug enclave has a DIFFERENT MRENCLAVE and MUST be rejected by clients.
@@ -70,16 +86,16 @@ goproxy:              "off"                   # hermetic: relay-core imports zer
 goflags:              "-mod=readonly"
 build_flags:          "-trimpath -buildvcs=false"
 ldflags:              "-s -w -buildid="       # NO -X: common.Version is not linked into relay-core
-relay_core_elf_sha256: "<sha256 of the relay-core ELF>"   # byte-reproducible (see §6)
+relay_core_elf_sha256: "cd671ad8830959f6e5f42e9ecb627a1e6bc93274d5e402bfecdef357de964374"   # byte-reproducible pure-Go ELF
 
 # ---- Gramine / enclave (Stage 2) ----
-gramine_version:      "1.9"                   # set to the FULL exact apt version for a canonical release
+gramine_version:      "1.9 (apt 20260601~24.04.1)"   # exact apt version on the build host
 ubuntu_base:          "ubuntu:24.04"          # noble
-ubuntu_base_digest:   "sha256:<pin at release time>"      # measured base libs — pin by digest (§6)
-ca_certificates_ver:  "<apt version at release>"          # /etc/ssl/certs/ca-certificates.crt is measured
-enclave_size:         "1G"                    # from the committed template
+ubuntu_base_digest:   "(on-host build; not pinned to an image digest — see Build provenance)"
+ca_certificates_ver:  "20260601~24.04.1"      # /etc/ssl/certs/ca-certificates.crt is measured
+enclave_size:         "2G"                    # from the committed template
 max_threads:          64                      # from the committed template
-edmm_enable:          false                   # Gramine DEFAULT — NOT set in the template; measured as false. Confirm per release (§7).
+edmm_enable:          false                   # Gramine DEFAULT — NOT set in the template; measured as false.
 
 # ---- rendered manifest -D values (all baked into MRENCLAVE; MUST match on deploy) ----
 manifest_entrypoint:  "/app/relay-core"
@@ -88,22 +104,27 @@ manifest_listen_addr: "0.0.0.0:8443"
 manifest_dnsname:     "relay-core.local"
 
 # ---- hashes ----
-manifest_template_sha256:      "<sha256 of cmd/relay-core/relay-core.manifest.template @ commit>"
-rendered_manifest_sgx_sha256:  "<sha256 of relay-core.manifest.sgx>"   # expected deterministic (§6)
+manifest_template_sha256:      "ec48138f8fe9a33131fe2b9d485e88611bc11f63433f9fe1e67de835d293041f"
+rendered_manifest_sgx_sha256:  "c2fd9c5fc7eb4f0305434fdae4005418222f555d3f9ea9f0fc29c5f17f319398"   # from this on-host build
 # NOTE: relay-core.sig bytes are NOT reproducible (they embed the signing date +
 # the RSA signature). Only the MRENCLAVE *inside* the .sig is stable. Do not pin
 # the .sig file hash; extract and compare MRENCLAVE.
 
-# ---- exact reproduction command ----
+# ---- endpoints this build serves (all verbatim pass-through; billing host-side, metadata-only) ----
+# /v1/chat/completions, /v1/responses, /v1/messages (Anthropic native),
+# /v1/embeddings, /v1/rerank, /v1/images/generations,
+# /v1beta/models/*:generateContent (Gemini native).
+
+# ---- exact reproduction command (canonical, hermetic) ----
 build_command: >
   DOCKER_BUILDKIT=1 docker build --target artifacts
   -o type=local,dest=./artifacts
   --platform=linux/amd64
   --build-arg UBUNTU_REF=ubuntu:24.04@sha256:<ubuntu_base_digest>
-  --build-arg GRAMINE_VERSION=<exact gramine version>
+  --build-arg GRAMINE_VERSION=1.9
   -f cmd/relay-core/Dockerfile.reproducible .
 verify_command: >
-  scripts/repro_verify.sh <mrenclave> [<live-host:port>]
+  scripts/repro_verify.sh ba0d8c8065a24fa677e323af3ad7ba9ac615ba5aef042d0ac2c2cdf9b354eb8e [<live-host:port>]
 ```
 
 ---
@@ -119,7 +140,7 @@ identical for every rebuilder. This is the honest, complete surface.
 | Gramine loader (libos/PAL) pages + runtime libc glob `{{ gramine.runtimedir() }}/` | `gramine=1.9*` apt pin (set the FULL version for canonical) | A 1.9.x point release can shift loader bytes → different MRENCLAVE. Pin the exact version and record it. |
 | `/lib/x86_64-linux-gnu/*` and `/usr/lib/x86_64-linux-gnu/*` (trusted_files globs in the template) | Ubuntu **digest** pin + apt version pins | Largest residual surface. The globs hash whatever is in those dirs at sign time. |
 | `/etc/ssl/certs/ca-certificates.crt` | `ca-certificates` apt version | The CA bundle content is measured; pin its version. |
-| rendered manifest (`enclave_size=1G`, `max_threads=64`, mounts, `loader.env.*`, `sgx.debug=false`) | committed `cmd/relay-core/relay-core.manifest.template` | Geometry + env are measured; never pass geometry as environment-derived `-D`. `sgx.edmm_enable` is **not** set in the template, so it takes Gramine's default (`false`) — an implicit measured input; confirm per release (§7). |
+| rendered manifest (`enclave_size=2G`, `max_threads=64`, mounts, `loader.env.*`, `sgx.debug=false`) | committed `cmd/relay-core/relay-core.manifest.template` | Geometry + env are measured; never pass geometry as environment-derived `-D`. `sgx.edmm_enable` is **not** set in the template, so it takes Gramine's default (`false`) — an implicit measured input; confirm per release (§7). |
 | the four `-D` render values | fixed literals in `Dockerfile.reproducible` | entrypoint `/app/relay-core`, arch_libdir `/lib/x86_64-linux-gnu`, listen_addr `0.0.0.0:8443`, dnsname `relay-core.local`. |
 
 **NOT measured:** the signing key (only sets MRSIGNER), the encrypted `/secrets`
