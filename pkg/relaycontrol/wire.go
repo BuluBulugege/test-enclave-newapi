@@ -28,6 +28,12 @@ import (
 // the pure enclave relay so both paths enforce the exact same billing boundary.
 const MaxTokensLimit = 1<<30 - 1
 
+// MaxImageN bounds the image-generation count before it becomes a billing
+// multiplier. It mirrors dto.MaxImageN (dto/openai_image.go) so the enclave's
+// image request peek enforces the exact same bound as vanilla new-api — a huge
+// or negative "n" can never inflate (or, when wrapped, credit) the charge.
+const MaxImageN = 128
+
 // SelectChannelRequest is what the enclave sends the control plane to route a
 // call. It carries NO prompt content — only the model, a hash of the caller's
 // gateway token, and coarse routing metadata.
@@ -91,6 +97,22 @@ type SettleRequest struct {
 	LatencyMs          int64  `json:"latency_ms"`
 	UpstreamStatusCode int    `json:"upstream_status_code"`
 	IsStream           bool   `json:"is_stream"`
+	// RequestKind discriminates the billing model when it is NOT plain token
+	// billing. "" (default) => token billing from Prompt/Completion/TotalTokens.
+	// "image" => per-image billing from ImageCount x size/quality ratio (the host
+	// prices it; the enclave never computes money). All fields below are billing
+	// METADATA (integers / short enum strings), never prompt/response content, so
+	// the metadata-only invariant (settleJSONFields + wire_test) still holds.
+	RequestKind string `json:"request_kind,omitempty"`
+	// ImageCount is the number of images the upstream actually returned (already
+	// bounded to MaxImageN by the enclave). Billing multiplier for RequestKind
+	// "image".
+	ImageCount int `json:"image_count,omitempty"`
+	// ImageSize / ImageQuality are the request's size ("1024x1024") and quality
+	// ("hd"|"standard"|"auto"|...) selectors — pricing parameters only, matched
+	// host-side against a fixed ratio table (unknown values price at ratio 1.0).
+	ImageSize    string `json:"image_size,omitempty"`
+	ImageQuality string `json:"image_quality,omitempty"`
 }
 
 // requestPeek is the ONLY struct the enclave unmarshals the client body into. It
@@ -118,9 +140,12 @@ func PeekRequest(body []byte) (model string, stream bool, err error) {
 }
 
 // usagePeek captures only the token-count block from an upstream response. It
-// understands BOTH the OpenAI shape (usage.prompt_tokens/completion_tokens) and
-// the Anthropic shape (usage.input_tokens/output_tokens, and message.usage.* on
-// the message_start stream frame). No content field is ever read.
+// understands the OpenAI shape (usage.prompt_tokens/completion_tokens), the
+// Anthropic shape (usage.input_tokens/output_tokens, and message.usage.* on the
+// message_start stream frame), the OpenAI Responses API STREAMING shape
+// (response.usage.* on the response.completed event), and the Gemini NATIVE
+// shape (usageMetadata.promptTokenCount/candidatesTokenCount/totalTokenCount).
+// No content field is ever read.
 type usagePeek struct {
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -135,21 +160,50 @@ type usagePeek struct {
 			OutputTokens int `json:"output_tokens"`
 		} `json:"usage"`
 	} `json:"message"`
+	// Response carries usage for the OpenAI Responses API streaming case: the
+	// "response.completed" SSE event nests the full response object, whose usage
+	// lives at response.usage.input_tokens/output_tokens/total_tokens (NOT at the
+	// top level like non-streaming Responses, which reuses usage.input_tokens).
+	Response struct {
+		Usage struct {
+			InputTokens  int `json:"input_tokens"`
+			OutputTokens int `json:"output_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage"`
+	} `json:"response"`
+	// UsageMetadata carries usage for Gemini NATIVE generateContent responses
+	// (and the final :streamGenerateContent chunk). Without this the enclave
+	// settled native-Gemini calls at 0 tokens (billed free in ratio mode).
+	// Gemini reports these as SEPARATE, additive blocks (matching vanilla new-api
+	// service/relayconvert .../gemini_chat): prompt = promptTokenCount +
+	// toolUsePromptTokenCount; completion = candidatesTokenCount +
+	// thoughtsTokenCount (reasoning). Dropping thoughts/tool tokens undercharges
+	// thinking + function-calling requests.
+	UsageMetadata struct {
+		PromptTokenCount        int `json:"promptTokenCount"`
+		CandidatesTokenCount    int `json:"candidatesTokenCount"`
+		TotalTokenCount         int `json:"totalTokenCount"`
+		ToolUsePromptTokenCount int `json:"toolUsePromptTokenCount"`
+		ThoughtsTokenCount      int `json:"thoughtsTokenCount"`
+	} `json:"usageMetadata"`
 }
 
-// Usage holds the token counts extracted for billing. Metadata only.
+// Usage holds the token counts extracted for billing. Metadata only. ImageCount
+// is set only for image-generation responses (number of images returned) and is
+// zero for token-billed endpoints.
 type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	ImageCount       int
 }
 
 // PeekUsage extracts token counts from a (non-stream) response body or a single
-// stream frame that carries a usage block, for either OpenAI or Anthropic
-// shapes (input_tokens->prompt, output_tokens->completion). Returns ok=false if
-// no usage present. Anthropic splits input (message_start) and output
-// (message_delta) across frames, so a streaming caller must MERGE per field
-// across frames rather than replace (see streamThrough).
+// stream frame that carries a usage block, for the OpenAI, Anthropic, OpenAI
+// Responses (streaming response.completed), and Gemini-native shapes. Returns
+// ok=false if no usage present. Anthropic splits input (message_start) and
+// output (message_delta) across frames, so a streaming caller must MERGE per
+// field across frames rather than replace (see streamThrough).
 func PeekUsage(chunk []byte) (u Usage, ok bool) {
 	var p usagePeek
 	if err := json.Unmarshal(chunk, &p); err != nil {
@@ -162,6 +216,14 @@ func PeekUsage(chunk []byte) (u Usage, ok bool) {
 	if prompt == 0 {
 		prompt = p.Message.Usage.InputTokens
 	}
+	if prompt == 0 {
+		prompt = p.Response.Usage.InputTokens
+	}
+	if prompt == 0 {
+		// Gemini native: promptTokenCount + toolUsePromptTokenCount (tool-use input
+		// tokens are reported separately and are additive, per vanilla new-api).
+		prompt = p.UsageMetadata.PromptTokenCount + p.UsageMetadata.ToolUsePromptTokenCount
+	}
 	completion := p.Usage.CompletionTokens
 	if completion == 0 {
 		completion = p.Usage.OutputTokens
@@ -169,7 +231,22 @@ func PeekUsage(chunk []byte) (u Usage, ok bool) {
 	if completion == 0 {
 		completion = p.Message.Usage.OutputTokens
 	}
+	if completion == 0 {
+		completion = p.Response.Usage.OutputTokens
+	}
+	if completion == 0 {
+		// Gemini native: candidatesTokenCount + thoughtsTokenCount (reasoning /
+		// "thinking" output is a separate, often large block NOT folded into
+		// candidatesTokenCount — dropping it undercharges thinking models).
+		completion = p.UsageMetadata.CandidatesTokenCount + p.UsageMetadata.ThoughtsTokenCount
+	}
 	total := p.Usage.TotalTokens
+	if total == 0 {
+		total = p.Response.Usage.TotalTokens
+	}
+	if total == 0 {
+		total = p.UsageMetadata.TotalTokenCount
+	}
 	if prompt == 0 && completion == 0 && total == 0 {
 		return Usage{}, false
 	}
@@ -177,6 +254,64 @@ func PeekUsage(chunk []byte) (u Usage, ok bool) {
 		total = prompt + completion
 	}
 	return Usage{PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total}, true
+}
+
+// imageParamsPeek captures ONLY the billing-relevant scalars of an image
+// generation request. prompt/images/mask content fields are dropped by
+// encoding/json (never materialized). N is read as a json.Number so a huge or
+// negative value is bounded explicitly (a raw *uint would silently wrap a
+// negative into a giant multiplier — see AGENTS.md billing-safety).
+type imageParamsPeek struct {
+	Size    string      `json:"size"`
+	Quality string      `json:"quality"`
+	N       json.Number `json:"n"`
+	Stream  bool        `json:"stream"`
+}
+
+// PeekImageParams extracts the size, quality, count (n), and stream flag from an
+// image-generation request body WITHOUT reading the prompt. n is clamped to
+// [1, MaxImageN]; a missing, malformed, or non-positive n becomes 1, and any n
+// above MaxImageN is capped, so it can never overflow the billing multiplier.
+func PeekImageParams(body []byte) (size, quality string, n int, stream bool) {
+	var p imageParamsPeek
+	if err := json.Unmarshal(body, &p); err != nil {
+		return "", "", 1, false
+	}
+	n = 1
+	if p.N != "" {
+		if v, err := p.N.Int64(); err == nil {
+			if v > MaxImageN {
+				n = MaxImageN
+			} else if v >= 1 {
+				n = int(v)
+			}
+		}
+	}
+	return p.Size, p.Quality, n, p.Stream
+}
+
+// imageCountPeek counts the images in an image-generation RESPONSE without
+// retaining the (multi-MB) b64/url blobs: each element decodes into an empty
+// struct, so encoding/json scans but discards the payload. Only the array
+// length is kept.
+type imageCountPeek struct {
+	Data []struct{} `json:"data"`
+}
+
+// PeekImageCount returns the number of images an image-generation response
+// returned (len of the data array), clamped to MaxImageN so a misbehaving
+// upstream cannot inflate the billing multiplier. Returns 0 when the body has
+// no data array (caller falls back to the request's bounded n).
+func PeekImageCount(body []byte) int {
+	var p imageCountPeek
+	if err := json.Unmarshal(body, &p); err != nil {
+		return 0
+	}
+	n := len(p.Data)
+	if n > MaxImageN {
+		n = MaxImageN
+	}
+	return n
 }
 
 // ResolveModelMapping applies a channel's JSON model mapping to model. Chained

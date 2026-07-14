@@ -3,6 +3,9 @@ package relaycontrol
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestPeekRequest(t *testing.T) {
@@ -148,6 +151,8 @@ func TestSettleRequestFieldsMetadataOnly(t *testing.T) {
 		"model": true, "prompt_tokens": true, "completion_tokens": true,
 		"total_tokens": true, "latency_ms": true, "upstream_status_code": true,
 		"is_stream": true,
+		// Non-token billing metadata (integers / short enum strings — never content).
+		"request_kind": true, "image_count": true, "image_size": true, "image_quality": true,
 	}
 	// Reflect over the struct tags.
 	got := settleJSONFields()
@@ -157,4 +162,114 @@ func TestSettleRequestFieldsMetadataOnly(t *testing.T) {
 				"metadata-only invariant broken", f)
 		}
 	}
+}
+
+// TestPeekUsageResponsesStreaming pins that the OpenAI Responses API streaming
+// usage (nested under response.usage on the response.completed event) is billed.
+// Without this the stream would settle at 0 tokens (free).
+func TestPeekUsageResponsesStreaming(t *testing.T) {
+	frame := []byte(`{"type":"response.completed","response":{"id":"resp_1","usage":{"input_tokens":10,"output_tokens":20,"total_tokens":30}}}`)
+	u, ok := PeekUsage(frame)
+	require.True(t, ok, "response.completed usage must be recognized")
+	assert.Equal(t, 10, u.PromptTokens)
+	assert.Equal(t, 20, u.CompletionTokens)
+	assert.Equal(t, 30, u.TotalTokens)
+}
+
+// TestPeekUsageResponsesNonStream pins the non-streaming Responses shape
+// (top-level usage.input_tokens/output_tokens), which reuses the Anthropic
+// input/output fallback.
+func TestPeekUsageResponsesNonStream(t *testing.T) {
+	body := []byte(`{"id":"resp_1","usage":{"input_tokens":7,"output_tokens":13,"total_tokens":20}}`)
+	u, ok := PeekUsage(body)
+	require.True(t, ok)
+	assert.Equal(t, 7, u.PromptTokens)
+	assert.Equal(t, 13, u.CompletionTokens)
+	assert.Equal(t, 20, u.TotalTokens)
+}
+
+// TestPeekUsageGeminiNative pins that Gemini native usageMetadata is billed
+// (previously native-Gemini calls settled free — a real under-billing hole),
+// INCLUDING the separate, additive thoughtsTokenCount (thinking) and
+// toolUsePromptTokenCount blocks that vanilla new-api adds.
+func TestPeekUsageGeminiNative(t *testing.T) {
+	// Plain response (no thinking / tools).
+	body := []byte(`{"candidates":[{"content":{"parts":[{"text":"hi"}]}}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":5,"totalTokenCount":16}}`)
+	u, ok := PeekUsage(body)
+	require.True(t, ok, "usageMetadata must be recognized")
+	assert.Equal(t, 11, u.PromptTokens)
+	assert.Equal(t, 5, u.CompletionTokens)
+	assert.Equal(t, 16, u.TotalTokens)
+
+	// Thinking model with function-calling: thoughts add to completion, tool-use
+	// prompt tokens add to prompt (both separate from the base counts).
+	thinking := []byte(`{"usageMetadata":{"promptTokenCount":1000,"toolUsePromptTokenCount":300,"candidatesTokenCount":200,"thoughtsTokenCount":3000,"totalTokenCount":4500}}`)
+	tu, tok := PeekUsage(thinking)
+	require.True(t, tok)
+	assert.Equal(t, 1300, tu.PromptTokens, "prompt = promptTokenCount + toolUsePromptTokenCount")
+	assert.Equal(t, 3200, tu.CompletionTokens, "completion = candidatesTokenCount + thoughtsTokenCount")
+	assert.Equal(t, 4500, tu.TotalTokens, "total from totalTokenCount")
+}
+
+// TestPeekUsageRerankTotalOnly documents that a rerank response carrying only
+// usage.total_tokens is surfaced (ok=true, total set); the serveRelay caller is
+// responsible for the prompt=total normalization, so here we only assert total.
+func TestPeekUsageRerankTotalOnly(t *testing.T) {
+	body := []byte(`{"results":[],"usage":{"total_tokens":42}}`)
+	u, ok := PeekUsage(body)
+	require.True(t, ok)
+	assert.Equal(t, 42, u.TotalTokens)
+	assert.Equal(t, 0, u.PromptTokens)
+}
+
+// TestPeekImageParamsBoundsN is the billing-safety boundary for image count:
+// a missing, malformed, negative, or wrapped-huge n can NEVER become a billing
+// multiplier above MaxImageN, and a valid n is preserved. size/quality are read
+// verbatim; the prompt is never surfaced.
+func TestPeekImageParamsBoundsN(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		n    int
+	}{
+		{"valid n", `{"model":"dall-e-3","prompt":"secret","n":4,"size":"1024x1024","quality":"hd"}`, 4},
+		{"missing n defaults 1", `{"model":"dall-e-3","prompt":"x","size":"512x512"}`, 1},
+		{"zero -> 1", `{"model":"dall-e-3","prompt":"x","n":0}`, 1},
+		{"negative -> 1", `{"model":"dall-e-3","prompt":"x","n":-5}`, 1},
+		{"above max clamped", `{"model":"dall-e-3","prompt":"x","n":9999}`, MaxImageN},
+		{"exactly max", `{"model":"dall-e-3","prompt":"x","n":128}`, 128},
+		{"wrapped huge uint -> safe default 1", `{"model":"dall-e-3","prompt":"x","n":18446744073686646784}`, 1},
+		{"malformed json -> 1", `not json`, 1},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			size, quality, n, _ := PeekImageParams([]byte(c.body))
+			assert.Equal(t, c.n, n, "n bound")
+			// For the well-formed dall-e-3 hd 1024x1024 case, confirm size/quality passthrough.
+			if c.name == "valid n" {
+				assert.Equal(t, "1024x1024", size)
+				assert.Equal(t, "hd", quality)
+			}
+		})
+	}
+}
+
+// TestPeekImageParamsStream confirms the stream flag is read (the enclave refuses
+// streaming image responses).
+func TestPeekImageParamsStream(t *testing.T) {
+	_, _, _, stream := PeekImageParams([]byte(`{"model":"gpt-image-1","prompt":"x","stream":true}`))
+	assert.True(t, stream)
+	_, _, _, stream2 := PeekImageParams([]byte(`{"model":"gpt-image-1","prompt":"x"}`))
+	assert.False(t, stream2)
+}
+
+// TestPeekImageCount counts returned images and clamps to MaxImageN; a body with
+// no data array returns 0 (caller falls back to the bounded request n).
+func TestPeekImageCount(t *testing.T) {
+	assert.Equal(t, 2, PeekImageCount([]byte(`{"created":1,"data":[{"url":"a"},{"b64_json":"BBBB"}]}`)))
+	assert.Equal(t, 0, PeekImageCount([]byte(`{"created":1}`)))
+	assert.Equal(t, 0, PeekImageCount([]byte(`not json`)))
+	// A pathological upstream returning a huge data array is clamped.
+	big := "{\"data\":[" + strings.Repeat(`{},`, 200) + "{}]}"
+	assert.Equal(t, MaxImageN, PeekImageCount([]byte(big)))
 }

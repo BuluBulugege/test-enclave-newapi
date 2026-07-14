@@ -47,11 +47,11 @@ result as PARTIAL unless the chain is also verified.
 USAGE
 =====
     python3 verify_enclave.py --addr 8.217.148.82:8443 \
-        --mrenclave 98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee
+        --mrenclave ba0d8c8065a24fa677e323af3ad7ba9ac615ba5aef042d0ac2c2cdf9b354eb8e
 
     # verify, then send a real prompt over the SAME verified channel:
     python3 verify_enclave.py --addr 8.217.148.82:8443 \
-        --mrenclave 98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee \
+        --mrenclave ba0d8c8065a24fa677e323af3ad7ba9ac615ba5aef042d0ac2c2cdf9b354eb8e \
         --token sk-... --model deepseek/deepseek-chat --send-prompt "Say hi"
 
 Only the standard library is required for Checks 1 & 2. Check 3 (channel

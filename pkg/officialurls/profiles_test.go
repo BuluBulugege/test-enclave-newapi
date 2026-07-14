@@ -16,7 +16,12 @@ func TestOfficialProviders(t *testing.T) {
 		{"OpenAI", 1, "https://api.openai.com", "Authorization", "Bearer "},
 		{"OpenRouter", 20, "https://openrouter.ai/api", "Authorization", "Bearer "},
 		{"Anthropic", 14, "https://api.anthropic.com", "x-api-key", ""},
-		{"Gemini/AIStudio", 24, "https://generativelanguage.googleapis.com", "Authorization", "Bearer "},
+		// Gemini (24) serves multiple formats via Routes, not a single top-level
+		// auth — see TestGeminiNativeAndCompatRoutes. Its base URL is still pinned:
+	}
+	// Gemini base URL (its auth is per-format, checked separately).
+	if got := For(24); got != "https://generativelanguage.googleapis.com" {
+		t.Fatalf("Gemini base URL = %q", got)
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -57,21 +62,20 @@ func TestUnsupportedTypeNotOfficial(t *testing.T) {
 }
 
 // TestGeminiOpenAICompatPathRewrite pins Gemini's OpenAI-compatible path rewrite
-// (client's /v1/... -> upstream /v1beta/openai/...), which is what lets the
-// enclave serve Gemini as a faithful body-model pass-through.
+// (client's /v1/... -> upstream /v1beta/openai/...) via its "openai" Route.
 func TestGeminiOpenAICompatPathRewrite(t *testing.T) {
 	p, ok := ProfileFor(24)
-	if !ok || p.PathRewrite == nil {
-		t.Fatal("Gemini profile must define a PathRewrite")
+	if !ok {
+		t.Fatal("Gemini must have a profile")
 	}
 	cases := map[string]string{
 		"/v1/chat/completions": "/v1beta/openai/chat/completions",
 		"/v1/embeddings":       "/v1beta/openai/embeddings",
-		"/v1beta/openai/x":     "/v1beta/openai/x", // already-rewritten / non-/v1 left as-is
 	}
 	for in, want := range cases {
-		if got := p.PathRewrite(in); got != want {
-			t.Fatalf("rewrite(%q) = %q, want %q", in, got, want)
+		_, _, _, got, ok := p.ResolveRoute("openai", in)
+		if !ok || got != want {
+			t.Fatalf("openai route rewrite(%q) = %q (ok=%v), want %q", in, got, ok, want)
 		}
 	}
 }
@@ -108,8 +112,40 @@ func TestDatabricksOfficialSupport(t *testing.T) {
 	if !p.SuffixHost {
 		t.Fatal("Databricks profile must be marked SuffixHost (host from control plane, re-validated)")
 	}
-	if p.AuthHeader != "Authorization" || p.AuthPrefix != "Bearer " {
-		t.Fatalf("Databricks must use Bearer auth, got %q + %q", p.AuthPrefix, p.AuthHeader)
+	// Databricks serves BOTH OpenAI chat and native Anthropic Messages, both Bearer,
+	// at different upstream paths — no body transformation.
+	ah, ap, _, up, ok := p.ResolveRoute("openai", "/v1/chat/completions")
+	if !ok || ah != "Authorization" || ap != "Bearer " || up != "/v1/chat/completions" {
+		t.Fatalf("Databricks openai route wrong: ok=%v %q+%q path=%q", ok, ap, ah, up)
+	}
+	ah, ap, _, up, ok = p.ResolveRoute("claude", "/v1/messages")
+	if !ok || ah != "Authorization" || ap != "Bearer " || up != "/anthropic/v1/messages" {
+		t.Fatalf("Databricks claude route must map to /anthropic/v1/messages: ok=%v path=%q", ok, up)
+	}
+	// A format Databricks does not serve is refused.
+	if _, _, _, _, ok := p.ResolveRoute("gemini", "/v1beta/models/x:generateContent"); ok {
+		t.Fatal("Databricks must not serve the gemini format")
+	}
+}
+
+// TestGeminiNativeAndCompatRoutes pins Gemini's two formats: the OpenAI-compat
+// surface (Bearer, /v1beta/openai/...) and the native generateContent surface
+// (x-goog-api-key, verbatim path).
+func TestGeminiNativeAndCompatRoutes(t *testing.T) {
+	p, ok := ProfileFor(24)
+	if !ok {
+		t.Fatal("Gemini must have a profile")
+	}
+	ah, ap, _, up, ok := p.ResolveRoute("openai", "/v1/chat/completions")
+	if !ok || ah != "Authorization" || ap != "Bearer " || up != "/v1beta/openai/chat/completions" {
+		t.Fatalf("Gemini openai-compat route wrong: ok=%v %q+%q path=%q", ok, ap, ah, up)
+	}
+	ah, _, _, up, ok = p.ResolveRoute("gemini", "/v1beta/models/gemini-2.0-flash:generateContent")
+	if !ok || ah != "x-goog-api-key" || up != "/v1beta/models/gemini-2.0-flash:generateContent" {
+		t.Fatalf("Gemini native route must use x-goog-api-key + verbatim path: ok=%v ah=%q path=%q", ok, ah, up)
+	}
+	if _, _, _, _, ok := p.ResolveRoute("claude", "/v1/messages"); ok {
+		t.Fatal("Gemini must not serve the claude format")
 	}
 }
 

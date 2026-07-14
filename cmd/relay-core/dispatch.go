@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/QuantumNous/new-api/pkg/officialurls"
 	"github.com/QuantumNous/new-api/pkg/relaycontrol"
 )
 
@@ -47,18 +46,20 @@ func (h *relayHandler) forward(
 	body []byte,
 	apiKey string,
 	isStream bool,
-	profile officialurls.UpstreamProfile,
+	imageMode bool,
+	authHeader, authPrefix string,
+	extraHeaders map[string]string,
 ) (relaycontrol.Usage, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, upstreamURL, bytes.NewReader(body))
 	if err != nil {
 		return relaycontrol.Usage{}, 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	// Inject the upstream credential the way THIS provider expects (Bearer /
-	// x-api-key / x-goog-api-key), per the compiled-in official profile. The
-	// client's inbound gateway token is never forwarded upstream.
-	req.Header.Set(profile.AuthHeader, profile.AuthPrefix+apiKey)
-	for k, v := range profile.ExtraHeaders {
+	// Inject the upstream credential the way THIS provider+format expects (Bearer /
+	// x-api-key / x-goog-api-key), per the compiled-in official route. The client's
+	// inbound gateway token is never forwarded upstream.
+	req.Header.Set(authHeader, authPrefix+apiKey)
+	for k, v := range extraHeaders {
 		req.Header.Set(k, v)
 	}
 	if isStream {
@@ -80,12 +81,15 @@ func (h *relayHandler) forward(
 	if isStream {
 		return h.streamThrough(w, resp)
 	}
-	return h.bufferThrough(w, resp)
+	return h.bufferThrough(w, resp, imageMode)
 }
 
 // bufferThrough handles a non-stream response: read fully into memory, forward
-// to client, peek usage. The body is freed when this returns; nothing persists.
-func (h *relayHandler) bufferThrough(w http.ResponseWriter, resp *http.Response) (relaycontrol.Usage, int, error) {
+// to client, peek usage. When imageMode is set (image-generation response), it
+// also counts the returned images (data array length) for per-image billing —
+// the b64/url blobs are scanned but never retained (see PeekImageCount). The
+// body is freed when this returns; nothing persists.
+func (h *relayHandler) bufferThrough(w http.ResponseWriter, resp *http.Response, imageMode bool) (relaycontrol.Usage, int, error) {
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return relaycontrol.Usage{}, resp.StatusCode, err
@@ -94,6 +98,9 @@ func (h *relayHandler) bufferThrough(w http.ResponseWriter, resp *http.Response)
 		return relaycontrol.Usage{}, resp.StatusCode, err
 	}
 	usage, _ := relaycontrol.PeekUsage(data)
+	if imageMode {
+		usage.ImageCount = relaycontrol.PeekImageCount(data)
+	}
 	return usage, resp.StatusCode, nil
 }
 

@@ -22,7 +22,7 @@ pip install cryptography
 
 python3 verify_enclave.py \
   --addr 8.217.148.82:8443 \
-  --mrenclave 98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee
+  --mrenclave ba0d8c8065a24fa677e323af3ad7ba9ac615ba5aef042d0ac2c2cdf9b354eb8e
 ```
 
 期望输出：
@@ -44,7 +44,7 @@ quote，在装有 `libsgx_dcap_quoteverify` 的机器上再跑 Go 验证器：
 ```bash
 CGO_ENABLED=1 go build -tags dcap ./cmd/relay-verify
 ./relay-verify -addr 8.217.148.82:8443 \
-  -mrenclave 98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee -dcap-verify
+  -mrenclave ba0d8c8065a24fa677e323af3ad7ba9ac615ba5aef042d0ac2c2cdf9b354eb8e -dcap-verify
 ```
 
 通过后显示 `✅ DCAP signature chain verified to Intel SGX root` + `VERIFICATION PASSED`。
@@ -59,7 +59,7 @@ TLS 证书，要求 `SHA-512(公钥)` 等于已验证 quote 里的 `report_data`
 ```bash
 python3 verify_enclave.py \
   --addr 8.217.148.82:8443 \
-  --mrenclave 98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee \
+  --mrenclave ba0d8c8065a24fa677e323af3ad7ba9ac615ba5aef042d0ac2c2cdf9b354eb8e \
   --token <你的网关 API token> \
   --model databricks-claude-opus-4-8 \
   --send-prompt "Reply with exactly: VERIFIED"

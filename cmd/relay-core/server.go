@@ -85,6 +85,27 @@ func newHandler(cp ControlPlane, keys UpstreamKeyStore, raCert *raenclave.Cert) 
 	// official profile + base URL already exist; this is routing + format
 	// plumbing only, still a faithful pass-through.
 	mux.HandleFunc("/v1/messages", relay)
+	// OpenAI Responses API (/v1/responses). Token-billed exactly like chat; a
+	// verbatim JSON/SSE pass-through. Usage is peeked from usage.input_tokens
+	// (non-stream) or the response.completed event (stream).
+	mux.HandleFunc("/v1/responses", relay)
+	// Embeddings (/v1/embeddings). Clean JSON pass-through; billed on prompt
+	// tokens from the response usage block.
+	mux.HandleFunc("/v1/embeddings", relay)
+	// Rerank (/v1/rerank). Clean JSON pass-through; billed on usage.total_tokens
+	// (normalized to prompt tokens by serveRelay).
+	mux.HandleFunc("/v1/rerank", relay)
+	// Image generation (/v1/images/generations). The request/response body is
+	// relayed verbatim; only the billing SCALARS (model/n/size/quality from the
+	// request, image count from the response) are peeked — never prompt or image
+	// bytes. Streaming image responses are refused for now (v1). Per-image
+	// pricing is computed host-side.
+	mux.HandleFunc("/v1/images/generations", relay)
+	// Gemini NATIVE generateContent surface: /v1beta/models/{model}:generateContent
+	// (and :streamGenerateContent). Forwarded verbatim with x-goog-api-key per the
+	// Gemini profile's "gemini" route. The "/v1beta/models/" prefix pattern matches
+	// both the exact and the parameterized model paths.
+	mux.HandleFunc("/v1beta/models/", relay)
 	return mux
 }
 

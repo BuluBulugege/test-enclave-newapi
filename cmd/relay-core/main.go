@@ -77,6 +77,23 @@ func suffixHostUpstreamURL(channelType int, baseURL, requestPath string) (string
 	return strings.TrimRight(baseURL, "/") + requestPath, nil
 }
 
+// modelFromGeminiPath extracts the model id from a native Gemini path like
+// /v1beta/models/gemini-2.0-flash:generateContent (or :streamGenerateContent),
+// returning "" when the path is not that shape. Used only for routing scalars —
+// no prompt content is touched.
+func modelFromGeminiPath(path string) string {
+	const marker = "/models/"
+	i := strings.Index(path, marker)
+	if i < 0 {
+		return ""
+	}
+	rest := path[i+len(marker):]
+	if j := strings.IndexByte(rest, ':'); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
+}
+
 // serveRelay handles one client request end-to-end. It never persists content.
 func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -91,24 +108,65 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 2. Extract ONLY routing scalars. Prompt content is not parsed into a value.
+	//    Gemini's NATIVE surface carries the model in the URL path
+	//    (/v1beta/models/{model}:generateContent), not the body, so fall back to a
+	//    path extraction when the body has no model field.
 	model, isStream, err := relaycontrol.PeekRequest(body)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
-		return
+		if m := modelFromGeminiPath(r.URL.Path); m != "" {
+			model = m
+			isStream = strings.Contains(r.URL.Path, ":streamGenerateContent")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid request: "+err.Error())
+			return
+		}
 	}
 
-	// 3. Ask the control plane which channel to use (no content sent). The relay
-	//    format + path are derived from the request path so the control plane can
-	//    resolve path-scoped channels (e.g. Claude /v1/messages) correctly.
+	path := r.URL.Path
+	isChat := strings.HasSuffix(path, "/chat/completions")
+	isImage := strings.HasSuffix(path, "/images/generations")
+	isRerank := strings.HasSuffix(path, "/rerank")
+
+	// Image generation bills per image (n x size/quality ratio), not per token.
+	// Peek ONLY the billing scalars (size/quality/n) — the prompt and any image
+	// bytes stay opaque, never materialized. Streaming image responses are not
+	// supported by the enclave yet (the per-image count is trued-up from the
+	// buffered non-stream response body).
+	var imgSize, imgQuality string
+	var imgN int
+	if isImage {
+		imgSize, imgQuality, imgN, _ = relaycontrol.PeekImageParams(body)
+		if isStream {
+			writeError(w, http.StatusBadRequest, "official image streaming is not supported by the enclave yet")
+			return
+		}
+	}
+
+	// 3. Ask the control plane which channel to use (no content sent). relayFormat
+	//    drives both channel selection and the per-provider upstream route
+	//    (profile.ResolveRoute). Chat / Responses / Embeddings share the "openai"
+	//    route (Bearer, verbatim path); images and rerank get their own format so
+	//    a provider that does not serve them is refused automatically.
 	relayFormat := "openai"
-	if strings.HasSuffix(r.URL.Path, "/messages") {
+	switch {
+	case strings.HasSuffix(path, "/messages"):
 		relayFormat = "claude"
+	case strings.HasPrefix(path, "/v1beta/models/") ||
+		strings.Contains(path, ":generateContent") ||
+		strings.Contains(path, ":streamGenerateContent"):
+		relayFormat = "gemini"
+	case isImage:
+		relayFormat = "image"
+	case isRerank:
+		relayFormat = "rerank"
 	}
 
-	// For OpenAI-family streams, ensure the upstream emits a usage frame so the
-	// request can be billed (the enclave has no tokenizer). This modifies only
-	// top-level JSON keys; prompt content stays opaque and is never materialized.
-	if relayFormat == "openai" && isStream {
+	// Only /v1/chat/completions needs stream_options.include_usage injected so the
+	// upstream emits a final usage frame (the enclave has no tokenizer). The
+	// Responses API already reports usage in its response.completed event, and the
+	// non-stream endpoints don't need it. This edits only top-level JSON keys;
+	// prompt content stays opaque and is never materialized.
+	if isChat && isStream {
 		body = relaycontrol.EnsureStreamUsage(body)
 	}
 	sel, err := h.cp.SelectChannel(ctx, relaycontrol.SelectChannelRequest{
@@ -140,19 +198,6 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A SuffixHost provider (e.g. Databricks) speaks only the OpenAI-compatible
-	// format on a per-workspace host. The enclave is a faithful passthrough — it
-	// never transforms request/response bodies (that would touch content, which
-	// the no-content design forbids) — so it cannot convert an Anthropic Messages
-	// (/v1/messages) request/response for such a provider. Serve these providers
-	// ONLY on the OpenAI path and steer /v1/messages clients accordingly; the
-	// normal (non-enclave) new-api path does the Claude<->OpenAI conversion.
-	if profile.SuffixHost && relayFormat == "claude" {
-		writeError(w, http.StatusBadRequest,
-			"this provider is served only via /v1/chat/completions on /official; use the OpenAI format")
-		return
-	}
-
 	// 5. Resolve the upstream key from the enclave-owned store. The current v1
 	//    control-plane fallback may supply it from new-api's DB; for AWS this is
 	//    AK|SK|region[|sessionToken]. It is never forwarded to the client or logged.
@@ -180,11 +225,16 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 		}
 		usage, status, err = h.forwardAWSBedrock(ctx, w, body, apiKey, upstreamModel, isStream, requestID)
 	} else {
-		// Some providers serve the OpenAI-style request under a different upstream
-		// path (e.g. Gemini's /v1beta/openai). Apply the measured rewrite first.
-		upstreamPath := r.URL.Path
-		if profile.PathRewrite != nil {
-			upstreamPath = profile.PathRewrite(upstreamPath)
+		// Resolve the auth + upstream path for THIS request's native format. A
+		// provider may serve several formats at different paths/auth (e.g.
+		// Databricks OpenAI chat + native Anthropic Messages, or Gemini's
+		// OpenAI-compat surface + native generateContent). A format the provider
+		// does not serve is refused. No body transformation ever happens.
+		authHeader, authPrefix, extraHeaders, upstreamPath, routeOK := profile.ResolveRoute(relayFormat, r.URL.Path)
+		if !routeOK {
+			writeError(w, http.StatusBadRequest,
+				"this provider does not serve the "+relayFormat+" format on /official")
+			return
 		}
 		// Suffix-host providers (Databricks) take the workspace host from the
 		// control plane, re-validated against the measured host-suffix rule;
@@ -200,7 +250,7 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, urlErr.Error())
 			return
 		}
-		usage, status, err = h.forward(ctx, w, upstreamURL, body, apiKey, isStream, profile)
+		usage, status, err = h.forward(ctx, w, upstreamURL, body, apiKey, isStream, isImage, authHeader, authPrefix, extraHeaders)
 	}
 	latency := h.nowMilli() - start
 	if err != nil {
@@ -211,10 +261,16 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 7. Settle: METADATA ONLY (token counts, no content). The client response is
-	//    already delivered, so a settle failure is non-fatal — but it MUST be
-	//    visible (a dropped settle = a free request), so log it to stderr.
-	if serr := h.cp.Settle(ctx, relaycontrol.SettleRequest{
+	// Rerank reports only usage.total_tokens; bill it as prompt tokens, matching
+	// vanilla new-api which sets prompt_tokens = total_tokens for rerank.
+	if isRerank && usage.PromptTokens == 0 && usage.CompletionTokens == 0 && usage.TotalTokens > 0 {
+		usage.PromptTokens = usage.TotalTokens
+	}
+
+	// 7. Settle: METADATA ONLY (token counts / image count — no content). The
+	//    client response is already delivered, so a settle failure is non-fatal —
+	//    but it MUST be visible (a dropped settle = a free request), so log it.
+	settle := relaycontrol.SettleRequest{
 		RequestID:          requestID,
 		UserID:             sel.UserID,
 		TokenID:            sel.TokenID,
@@ -226,7 +282,24 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 		LatencyMs:          latency,
 		UpstreamStatusCode: status,
 		IsStream:           isStream,
-	}); serr != nil {
+	}
+	if isImage {
+		// Per-image billing: the control plane prices count x size/quality ratio.
+		// Use the images actually returned; fall back to the bounded request n
+		// (both are already clamped to MaxImageN). No token counts apply.
+		count := usage.ImageCount
+		if count == 0 {
+			count = imgN
+		}
+		settle.RequestKind = "image"
+		settle.ImageCount = count
+		settle.ImageSize = imgSize
+		settle.ImageQuality = imgQuality
+		settle.PromptTokens = 0
+		settle.CompletionTokens = 0
+		settle.TotalTokens = 0
+	}
+	if serr := h.cp.Settle(ctx, settle); serr != nil {
 		fmt.Fprintf(os.Stderr, "[settle] failed request_id=%s: %v\n", requestID, serr)
 	}
 }

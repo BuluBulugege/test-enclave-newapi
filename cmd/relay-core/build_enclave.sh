@@ -4,6 +4,15 @@
 # built /root/relay-core binary + a gramine signing key).
 set -euo pipefail
 
+# NOTE ON REPRODUCIBILITY: this ad-hoc script renders + signs a PRE-BUILT
+# binary, so the MRENCLAVE it prints depends on HOW that binary was compiled
+# and on the ENTRYPOINT path measured into the manifest. The PUBLISHED /
+# PINNED value comes only from the hermetic reproducible build
+# (cmd/relay-core/Dockerfile.reproducible): CGO_ENABLED=0 GOOS=linux
+# GOARCH=amd64 go build -trimpath -buildvcs=false -mod=readonly at the fixed
+# entrypoint /app/relay-core. Do NOT pin a value from an ad-hoc
+# `go build -o /root/relay-core` here — it will differ.
+
 ENTRYPOINT="${ENTRYPOINT:-/root/relay-core}"
 LISTEN_ADDR="${LISTEN_ADDR:-0.0.0.0:8443}"
 DNSNAME="${DNSNAME:-relay-core.local}"
