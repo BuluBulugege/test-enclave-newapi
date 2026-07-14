@@ -38,13 +38,15 @@ type cpSelectReq struct {
 }
 
 type cpSelectResp struct {
-	ChannelID   int    `json:"channel_id"`
-	ChannelType int    `json:"channel_type"`
-	UpstreamKey string `json:"upstream_key"`
-	UserID      int    `json:"user_id"`
-	TokenID     int    `json:"token_id"`
-	IsOfficial  bool   `json:"is_official"`
-	Error       string `json:"error,omitempty"`
+	ChannelID         int    `json:"channel_id"`
+	ChannelType       int    `json:"channel_type"`
+	UpstreamKey       string `json:"upstream_key"`
+	UpstreamModelName string `json:"upstream_model_name"`
+	UpstreamBaseURL   string `json:"upstream_base_url"`
+	UserID            int    `json:"user_id"`
+	TokenID           int    `json:"token_id"`
+	IsOfficial        bool   `json:"is_official"`
+	Error             string `json:"error,omitempty"`
 }
 
 func (h *httpControlPlane) SelectChannel(ctx context.Context, req relaycontrol.SelectChannelRequest) (relaycontrol.SelectChannelResponse, error) {
@@ -73,12 +75,14 @@ func (h *httpControlPlane) SelectChannel(ctx context.Context, req relaycontrol.S
 		return relaycontrol.SelectChannelResponse{Error: out.Error}, nil
 	}
 	return relaycontrol.SelectChannelResponse{
-		ChannelID:      out.ChannelID,
-		ChannelType:    out.ChannelType,
-		IsOfficial:     out.IsOfficial,
-		UserID:         out.UserID,
-		TokenID:        out.TokenID,
-		UpstreamAPIKey: out.UpstreamKey, // key comes from new-api's DB (host-visible path, v1)
+		ChannelID:         out.ChannelID,
+		ChannelType:       out.ChannelType,
+		IsOfficial:        out.IsOfficial,
+		UpstreamModelName: out.UpstreamModelName,
+		UpstreamBaseURL:   out.UpstreamBaseURL,
+		UserID:            out.UserID,
+		TokenID:           out.TokenID,
+		UpstreamAPIKey:    out.UpstreamKey, // key comes from new-api's DB (host-visible path, v1)
 	}, nil
 }
 

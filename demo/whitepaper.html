@@ -35,7 +35,7 @@ footer .wrap{word-break:break-all}
 <header class="hero"><div class="wrap">
 <h1>可验证的无日志 AI 网关 · 技术白皮书</h1>
 <p>基于 Intel SGX 机密计算 + DCAP 远程认证 + RA-TLS，构建在开源 AI 网关 new-api 之上。自顶向下讲清整条技术脉络与密码学细节。</p>
-<div class="meta">上线端点 https://8.217.148.82:8443 · MRENCLAVE 4aa951d16a0c237605f032cd480095b65be1f485e9f7a959a16f38a80428a445 · 开源 github.com/BuluBulugege/test-enclave-newapi</div>
+<div class="meta">上线端点 https://8.217.148.82:8443 · MRENCLAVE 98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee · 开源 github.com/BuluBulugege/test-enclave-newapi</div>
 </div></header>
 <nav class="toc"><div class="wrap"><a href="#s-00">0 · 全链路总览</a><a href="#s-01">1 · 问题与信任模型</a><a href="#s-02">2 · SGX Enclave / 机密计算</a><a href="#s-03">3 · MRENCLAVE 代码度量</a><a href="#s-04">4 · DCAP Quote 结构剖析</a><a href="#s-05">5 · 认证签名链到 Intel 根 CA</a><a href="#s-06">6 · RA-TLS 通道绑定(防转发 / 中间人)</a><a href="#s-07">7 · 可复现构建(指纹 ↔ 源码)</a><a href="#s-08">8 · 无正文留存 —— 为什么"可度量"</a><a href="#s-09">9 · 官方 URL 防 MITM + 多 provider 鉴权</a><a href="#s-10">10 · 威胁模型与诚实边界</a></div></nav>
 <main><div class="wrap">
@@ -306,7 +306,7 @@ footer .wrap{word-break:break-all}
 
   <p>这三块基石的作用分别是：</p>
   <ul>
-    <li><strong>MRENCLAVE = 代码 + manifest 的度量</strong>（当前上线值 <code>4aa951d16a0c237605f032cd480095b65be1f485e9f7a959a16f38a80428a445</code>）。它对 enclave 内的代码与配置做哈希，改动任意一字节，指纹即完全改变——等价于 Docker digest / git commit / 前端 SRI。</li>
+    <li><strong>MRENCLAVE = 代码 + manifest 的度量</strong>（当前上线值 <code>98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee</code>）。它对 enclave 内的代码与配置做哈希，改动任意一字节，指纹即完全改变——等价于 Docker digest / git commit / 前端 SRI。</li>
     <li><strong>Quote（远程认证凭证）</strong>由 CPU 出具、带 Intel 签名，通过 DCAP 验证签名链，证明「这是一块真的 SGX 芯片，此刻正在运行 MRENCLAVE 所标识的这份确切代码」。伪造不了。</li>
     <li><strong>RA-TLS 通道绑定</strong>把 <code>report_data</code> 固定为 <code>SHA-512(TLS SubjectPublicKeyInfo)</code>，即公钥指纹被写进被 Intel 签名的报告里。它保证「被认证的那个 enclave，就是你此刻正在通话的这个端点」，而不是被中间人转发或重放来的另一台。</li>
   </ul>
@@ -507,7 +507,7 @@ footer .wrap{word-break:break-all}
 
   <h3>2.4 在本系统中的落地</h3>
   <p>我们把 AI 请求的热路径——<strong>relay-core</strong>——整体放进 enclave，用 <strong>Gramine-SGX 1.9</strong> 这个 LibOS 把 Go 二进制无改造地跑进 SGX。远程认证走 <strong>DCAP（Data Center Attestation Primitives）</strong>：CPU 出具的 quote 内嵌 <strong>MRENCLAVE</strong>——对 enclave 初始代码页与配置（manifest）算出的度量指纹。本系统当前的度量值为：</p>
-  <p><code>MRENCLAVE = 4aa951d16a0c237605f032cd480095b65be1f485e9f7a959a16f38a80428a445</code></p>
+  <p><code>MRENCLAVE = 98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee</code></p>
   <p>RA-TLS 把这份硬件身份绑定到网络通道：enclave 在内部生成 TLS 密钥后，将 <code>report_data = SHA-512(TLS SubjectPublicKeyInfo)</code> 写进 quote，客户端据此确认"正在和我通话的这条 TLS，其私钥就活在被认证的 enclave 内部"（详见第 3、4 节）。</p>
   <p>与之对照，<strong>new-api 是不可信的控制面（control plane）</strong>，运行在 enclave 之外的普通宿主进程里。它只做元数据决策——用哪个渠道、扣多少 token——跨越信任边界流向它的<strong>只有 {model, token}，prompt 正文永不外泄</strong>。enclave 拿到路由决策后，直接对官方上游发起严格 TLS 连接：OpenAI（Bearer）、OpenRouter（Bearer + HTTP-Referer / X-Title）、Anthropic（x-api-key + anthropic-version）、Gemini / AI Studio（x-goog-api-key）。</p>
   <p>为了让 MRENCLAVE 可被任何人独立复算，构建被固定为<strong>可复现构建（reproducible build）</strong>：锁定 <strong>Go 1.26.1 + Gramine 1.9</strong> 及基础镜像，两次编译得到字节一致的二进制，从而收敛到同一 MRENCLAVE——指纹因此可以脱离对发布者的信任而被验证。</p>
@@ -1882,5 +1882,5 @@ footer .wrap{word-break:break-all}
   <p>把两节合起来看：本系统的承诺是<b>有条件的、且条件全部可核验</b>——当且仅当客户端真的验证了完整签名链、生产 enclave 关闭了 debug、构建可复现、平台 TCB 保持更新时，"运营方 / 宿主 / 云 / 网络看不到你的 prompt"这句话才成立；即便如此，元数据仍会泄漏，侧信道仍是需要持续对抗的残余风险。把这些边界摊开讲清楚，本身就是这套安全姿态的一部分。</p>
 </section>
 </div></main>
-<footer><div class="wrap">可验证的无日志 AI 网关 · 技术白皮书 · MRENCLAVE 4aa951d16a0c237605f032cd480095b65be1f485e9f7a959a16f38a80428a445 · 基于 QuantumNous/new-api（保留其署名与许可）</div></footer>
+<footer><div class="wrap">可验证的无日志 AI 网关 · 技术白皮书 · MRENCLAVE 98ba342adb8092d60c940e75ce8e07036c96226595b03f16bb8d35a52a1872ee · 基于 QuantumNous/new-api（保留其署名与许可）</div></footer>
 </body></html>

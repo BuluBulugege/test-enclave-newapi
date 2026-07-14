@@ -60,6 +60,23 @@ func officialUpstreamURL(channelType int, requestPath string) (string, error) {
 	return base + requestPath, nil
 }
 
+// suffixHostUpstreamURL builds the upstream URL for a SuffixHost provider (e.g.
+// Databricks) from the control-plane-supplied base URL. The host is RE-VALIDATED
+// against the enclave's compiled-in IsOfficialHostSuffix rule (measured into
+// MRENCLAVE), so an untrusted control plane can only pick a workspace WITHIN the
+// official host family, never repoint traffic elsewhere. Returns an error if the
+// base URL is missing, unparseable, or its host is not in the official family.
+func suffixHostUpstreamURL(channelType int, baseURL, requestPath string) (string, error) {
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" {
+		return "", fmt.Errorf("suffix-host channel type %d has no base URL", channelType)
+	}
+	if !officialurls.IsOfficialHostSuffix(channelType, baseURL) {
+		return "", fmt.Errorf("base URL host is not an official upstream for channel type %d", channelType)
+	}
+	return strings.TrimRight(baseURL, "/") + requestPath, nil
+}
+
 // serveRelay handles one client request end-to-end. It never persists content.
 func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -113,29 +130,33 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 4. ENFORCE property (2): re-derive officiality inside the enclave. We do NOT
-	//    trust sel.IsOfficial blindly. For an official channel we build the URL
-	//    from the compiled-in table and use the strict-TLS client.
+	//    trust sel.IsOfficial blindly. A supported provider has either a fixed
+	//    measured URL (OpenAI/OpenRouter/Anthropic/Gemini) or a measured dynamic
+	//    host policy (AWS region host).
 	profile, ok := officialurls.ProfileFor(sel.ChannelType)
-	if !officialurls.HasOfficial(sel.ChannelType) || !ok {
+	if !officialurls.SupportsOfficial(sel.ChannelType) || !ok {
 		writeError(w, http.StatusBadRequest,
 			"this provider is not a vetted official upstream in the enclave")
 		return
 	}
-	// Some providers serve the OpenAI-style request under a different upstream
-	// path (e.g. Gemini's OpenAI-compatible surface at /v1beta/openai). Apply the
-	// profile's path rewrite, if any, before building the compiled-in-host URL.
-	upstreamPath := r.URL.Path
-	if profile.PathRewrite != nil {
-		upstreamPath = profile.PathRewrite(upstreamPath)
-	}
-	upstreamURL, err := officialUpstreamURL(sel.ChannelType, upstreamPath)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+
+	// A SuffixHost provider (e.g. Databricks) speaks only the OpenAI-compatible
+	// format on a per-workspace host. The enclave is a faithful passthrough — it
+	// never transforms request/response bodies (that would touch content, which
+	// the no-content design forbids) — so it cannot convert an Anthropic Messages
+	// (/v1/messages) request/response for such a provider. Serve these providers
+	// ONLY on the OpenAI path and steer /v1/messages clients accordingly; the
+	// normal (non-enclave) new-api path does the Claude<->OpenAI conversion.
+	if profile.SuffixHost && relayFormat == "claude" {
+		writeError(w, http.StatusBadRequest,
+			"this provider is served only via /v1/chat/completions on /official; use the OpenAI format")
 		return
 	}
 
-	// 5. Resolve the upstream key from the enclave-owned store (host never sees it).
-	apiKey := sel.UpstreamAPIKey // fallback path (host-visible key), usually empty
+	// 5. Resolve the upstream key from the enclave-owned store. The current v1
+	//    control-plane fallback may supply it from new-api's DB; for AWS this is
+	//    AK|SK|region[|sessionToken]. It is never forwarded to the client or logged.
+	apiKey := sel.UpstreamAPIKey
 	if apiKey == "" {
 		apiKey, err = h.keys.KeyFor(sel.ChannelID)
 		if err != nil {
@@ -145,10 +166,42 @@ func (h *relayHandler) serveRelay(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 6. Dispatch upstream + stream response through, counting usage in memory.
-	//    The per-provider profile decides how the upstream credential is injected
-	//    (Bearer / x-api-key / x-goog-api-key + any required headers).
 	start := h.nowMilli()
-	usage, status, err := h.forward(ctx, w, upstreamURL, body, apiKey, isStream, profile)
+	var usage relaycontrol.Usage
+	var status int
+	if sel.ChannelType == awsBedrockChannelType {
+		if isStream {
+			writeError(w, http.StatusBadRequest, "AWS Bedrock streaming is not supported by the enclave yet")
+			return
+		}
+		upstreamModel := sel.UpstreamModelName
+		if upstreamModel == "" { // backward compatibility with an older control plane
+			upstreamModel = model
+		}
+		usage, status, err = h.forwardAWSBedrock(ctx, w, body, apiKey, upstreamModel, isStream, requestID)
+	} else {
+		// Some providers serve the OpenAI-style request under a different upstream
+		// path (e.g. Gemini's /v1beta/openai). Apply the measured rewrite first.
+		upstreamPath := r.URL.Path
+		if profile.PathRewrite != nil {
+			upstreamPath = profile.PathRewrite(upstreamPath)
+		}
+		// Suffix-host providers (Databricks) take the workspace host from the
+		// control plane, re-validated against the measured host-suffix rule;
+		// exact-host providers use the compiled-in official URL.
+		var upstreamURL string
+		var urlErr error
+		if profile.SuffixHost {
+			upstreamURL, urlErr = suffixHostUpstreamURL(sel.ChannelType, sel.UpstreamBaseURL, upstreamPath)
+		} else {
+			upstreamURL, urlErr = officialUpstreamURL(sel.ChannelType, upstreamPath)
+		}
+		if urlErr != nil {
+			writeError(w, http.StatusInternalServerError, urlErr.Error())
+			return
+		}
+		usage, status, err = h.forward(ctx, w, upstreamURL, body, apiKey, isStream, profile)
+	}
 	latency := h.nowMilli() - start
 	if err != nil {
 		// Do NOT log the upstream error body (leak site). Relay a generic error.

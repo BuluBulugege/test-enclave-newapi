@@ -23,6 +23,14 @@ type UpstreamProfile struct {
 	// sends (e.g. Gemini's OpenAI-compatible surface lives under /v1beta/openai).
 	// nil means the path is forwarded verbatim.
 	PathRewrite func(inPath string) string
+	// SuffixHost marks a provider whose upstream host is per-workspace and has no
+	// single compiled-in URL (e.g. Databricks *.azuredatabricks.net). For these,
+	// the enclave takes the host from the control-plane-supplied base URL but
+	// re-validates it against IsOfficialHostSuffix (measured into MRENCLAVE) before
+	// dialing, so the official host FAMILY stays tamper-proof while the specific
+	// workspace is selectable. The request path is forwarded verbatim (unless
+	// PathRewrite is also set).
+	SuffixHost bool
 }
 
 // geminiOpenAIPathRewrite maps the OpenAI-style path a client sends to Google
@@ -62,14 +70,23 @@ var profiles = map[int]UpstreamProfile{
 	// Exact host (measured), so it is a faithful pass-through like OpenAI.
 	24: {AuthHeader: "Authorization", AuthPrefix: "Bearer ", PathRewrite: geminiOpenAIPathRewrite},
 
-	// Azure (3), Vertex (41), AWS Bedrock (33) remain DEFERRED: they route the
-	// model in the request PATH (not the body) and/or need non-static auth
-	// (Azure per-resource host + api-key; Vertex OAuth2 SA token; AWS SigV4). The
-	// pure-stdlib crypto is already implemented + test-vector-validated here
-	// (SignSigV4 in sigv4.go, CachedVertexToken in vertexoauth.go) and host-suffix
-	// validation is in officialurls.go (IsOfficialHostSuffix), but wiring them into
-	// the enclave dispatch needs model-from-path routing + per-provider request/
-	// response handling (Bedrock event-stream) and a live-credential check.
+	// AWS Bedrock (33): region host is derived INSIDE the enclave from the
+	// validated credential's region, checked by IsOfficialHostSuffix, and signed
+	// with SigV4 (including x-amz-security-token for STS credentials). Dispatch is
+	// provider-specific (OpenAI chat -> Nova messages-v1 -> OpenAI response), so
+	// this profile is an admission-policy marker rather than static header auth.
+	33: {},
+
+	// Databricks (59): OpenAI-COMPATIBLE Foundation Model APIs at
+	// https://{workspace}.azuredatabricks.net/serving-endpoints. The workspace host
+	// is per-tenant (no single URL), so SuffixHost=true: the enclave takes the host
+	// from the control plane and re-validates it against IsOfficialHostSuffix(59)
+	// (measured into MRENCLAVE) before dialing. Model-in-body OpenAI passthrough
+	// with Authorization: Bearer <token>; Claude models only.
+	59: {AuthHeader: "Authorization", AuthPrefix: "Bearer ", SuffixHost: true},
+
+	// Azure (3) and Vertex (41) remain DEFERRED: they need per-resource/project
+	// route metadata + dynamic URL building and OAuth/token exchange wiring.
 }
 
 // ProfileFor returns the official auth profile for a channel type. ok=false for
@@ -83,7 +100,7 @@ func ProfileFor(channelType int) (UpstreamProfile, bool) {
 // SupportsOfficial reports whether a channel type is a vetted official provider:
 // it has both a non-empty official base URL and an auth profile.
 func SupportsOfficial(channelType int) bool {
-	if !HasOfficial(channelType) {
+	if !HasOfficial(channelType) && !HasOfficialHostRule(channelType) {
 		return false
 	}
 	_, ok := profiles[channelType]

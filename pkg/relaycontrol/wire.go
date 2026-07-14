@@ -23,6 +23,11 @@ import (
 	"strings"
 )
 
+// MaxTokensLimit bounds every user-controlled max-token field before it can
+// reach quota multiplication. It is shared by vanilla new-api validators and
+// the pure enclave relay so both paths enforce the exact same billing boundary.
+const MaxTokensLimit = 1<<30 - 1
+
 // SelectChannelRequest is what the enclave sends the control plane to route a
 // call. It carries NO prompt content — only the model, a hash of the caller's
 // gateway token, and coarse routing metadata.
@@ -55,8 +60,14 @@ type SelectChannelResponse struct {
 	ChannelType       int    `json:"channel_type"`
 	IsOfficial        bool   `json:"is_official"` // host hint; enclave re-derives authoritatively
 	UpstreamModelName string `json:"upstream_model_name"`
-	UserID            int    `json:"user_id"`
-	TokenID           int    `json:"token_id"`
+	// UpstreamBaseURL is the channel's configured base URL, populated ONLY for
+	// suffix-host providers (e.g. Databricks) whose workspace host has no single
+	// compiled-in URL. The enclave re-validates the host against its measured
+	// IsOfficialHostSuffix rule before dialing, so the official host FAMILY stays
+	// tamper-proof. Empty for exact-host providers.
+	UpstreamBaseURL string `json:"upstream_base_url,omitempty"`
+	UserID          int    `json:"user_id"`
+	TokenID         int    `json:"token_id"`
 	// UpstreamAPIKey is empty in the sealed-key design (decision 2). Present only
 	// for the optional host-visible-key fallback.
 	UpstreamAPIKey string `json:"upstream_api_key,omitempty"`
@@ -166,6 +177,36 @@ func PeekUsage(chunk []byte) (u Usage, ok bool) {
 		total = prompt + completion
 	}
 	return Usage{PromptTokens: prompt, CompletionTokens: completion, TotalTokens: total}, true
+}
+
+// ResolveModelMapping applies a channel's JSON model mapping to model. Chained
+// mappings are followed to the final target; cycles and malformed JSON fail
+// closed. This pure leaf mirrors vanilla new-api's ModelMappedHelper without
+// importing relay/helper into the enclave/control-plane boundary.
+func ResolveModelMapping(model, mappingJSON string) (string, error) {
+	if mappingJSON == "" || mappingJSON == "{}" {
+		return model, nil
+	}
+	mapping := map[string]string{}
+	if err := json.Unmarshal([]byte(mappingJSON), &mapping); err != nil {
+		return "", errors.New("invalid model mapping")
+	}
+	current := model
+	visited := map[string]bool{current: true}
+	for {
+		next, ok := mapping[current]
+		if !ok || next == "" {
+			return current, nil
+		}
+		if next == current {
+			return current, nil
+		}
+		if visited[next] {
+			return "", errors.New("model mapping contains a cycle")
+		}
+		visited[next] = true
+		current = next
+	}
 }
 
 // EnsureStreamUsage returns body with stream_options.include_usage=true for an

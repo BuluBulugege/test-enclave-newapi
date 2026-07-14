@@ -76,13 +76,47 @@ func TestGeminiOpenAICompatPathRewrite(t *testing.T) {
 	}
 }
 
-// TestDeferredProviders documents that the per-provider-URL / non-static-auth
-// providers Azure(3), AWS Bedrock(33), Vertex(41) are DEFERRED: not yet servable
-// as official through the enclave (no auth profile) until model-from-path routing
-// + their dispatch land. Adding a profile here is a deliberate MRENCLAVE policy
-// change and must come with URL-building + signing support.
+func TestAWSBedrockOfficialSupport(t *testing.T) {
+	if !SupportsOfficial(33) {
+		t.Fatal("AWS Bedrock must be admitted by its measured dynamic-host policy")
+	}
+	if HasOfficial(33) {
+		t.Fatal("AWS Bedrock must not have a single fixed base URL; its host is region-derived")
+	}
+	if !HasOfficialHostRule(33) {
+		t.Fatal("AWS Bedrock must have a dynamic official-host rule")
+	}
+	if _, ok := ProfileFor(33); !ok {
+		t.Fatal("AWS Bedrock must have an enclave dispatch profile marker")
+	}
+}
+
+func TestDatabricksOfficialSupport(t *testing.T) {
+	if !SupportsOfficial(59) {
+		t.Fatal("Databricks must be admitted by its measured suffix-host policy")
+	}
+	if HasOfficial(59) {
+		t.Fatal("Databricks must not have a single fixed base URL; the host is per-workspace")
+	}
+	if !HasOfficialHostRule(59) {
+		t.Fatal("Databricks must have a dynamic official-host rule")
+	}
+	p, ok := ProfileFor(59)
+	if !ok {
+		t.Fatal("Databricks must have an enclave profile")
+	}
+	if !p.SuffixHost {
+		t.Fatal("Databricks profile must be marked SuffixHost (host from control plane, re-validated)")
+	}
+	if p.AuthHeader != "Authorization" || p.AuthPrefix != "Bearer " {
+		t.Fatalf("Databricks must use Bearer auth, got %q + %q", p.AuthPrefix, p.AuthHeader)
+	}
+}
+
+// TestDeferredProviders documents that Azure(3) and Vertex(41) remain
+// unsupported until their per-resource/project metadata + dispatch are wired.
 func TestDeferredProviders(t *testing.T) {
-	for _, ct := range []int{3, 33, 41} {
+	for _, ct := range []int{3, 41} {
 		if SupportsOfficial(ct) {
 			t.Fatalf("type %d is deferred and must not be official yet", ct)
 		}
@@ -103,6 +137,10 @@ func TestIsOfficialHostSuffix(t *testing.T) {
 		{33, "bedrock-runtime.us-east-1.amazonaws.com"},
 		{41, "us-central1-aiplatform.googleapis.com"},
 		{41, "aiplatform.googleapis.com"},
+		{59, "adb-3339848738319975.15.azuredatabricks.net"},
+		{59, "https://adb-123.15.azuredatabricks.net/serving-endpoints"},
+		{59, "myworkspace.cloud.databricks.com"},
+		{59, "ws.gcp.databricks.com"},
 	}
 	for _, c := range ok {
 		if !IsOfficialHostSuffix(c.ct, c.host) {
@@ -113,13 +151,16 @@ func TestIsOfficialHostSuffix(t *testing.T) {
 		ct   int
 		host string
 	}{
-		{3, "evil-openai.azure.com"},                 // no label boundary
-		{3, "openai.azure.com.attacker.com"},         // suffix appended
-		{3, "openai.azure.com.evil"},                 // trailing label
-		{33, "notamazonaws.com"},                     // label boundary
-		{41, "aiplatform.googleapis.com.evil.com"},   // appended
-		{1, "api.openai.com"},                        // type with no suffix rule
-		{3, ""},                                      // empty
+		{3, "evil-openai.azure.com"},                   // no label boundary
+		{3, "openai.azure.com.attacker.com"},           // suffix appended
+		{3, "openai.azure.com.evil"},                   // trailing label
+		{33, "notamazonaws.com"},                       // label boundary
+		{41, "aiplatform.googleapis.com.evil.com"},     // appended
+		{1, "api.openai.com"},                          // type with no suffix rule
+		{3, ""},                                        // empty
+		{59, "azuredatabricks.net.attacker.com"},       // suffix appended
+		{59, "evilazuredatabricks.net"},                // no label boundary
+		{59, "adb-1.databricks.net.evil.com"},          // appended
 	}
 	for _, c := range bad {
 		if IsOfficialHostSuffix(c.ct, c.host) {

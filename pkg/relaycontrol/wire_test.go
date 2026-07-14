@@ -54,10 +54,10 @@ func TestPeekUsageAbsent(t *testing.T) {
 // is not billed as free (the counts feed settleOfficialBilling).
 func TestPeekUsageAnthropic(t *testing.T) {
 	cases := []struct {
-		name             string
-		body             string
-		prompt, compl    int
-		total            int
+		name          string
+		body          string
+		prompt, compl int
+		total         int
 	}{
 		{"non-stream", `{"type":"message","usage":{"input_tokens":25,"output_tokens":7}}`, 25, 7, 32},
 		{"message_start", `{"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1}}}`, 25, 1, 26},
@@ -79,6 +79,40 @@ func TestPeekUsageAnthropic(t *testing.T) {
 // TestEnsureStreamUsage verifies the enclave injects stream_options.include_usage
 // for OpenAI streams (so usage is emitted + billable) without touching content,
 // and leaves non-stream / non-JSON bodies untouched.
+func TestResolveModelMapping(t *testing.T) {
+	tests := []struct {
+		name    string
+		model   string
+		mapping string
+		want    string
+		wantErr bool
+	}{
+		{name: "empty mapping", model: "nova-micro", mapping: "", want: "nova-micro"},
+		{name: "direct mapping", model: "nova-micro", mapping: `{"nova-micro":"amazon.nova-micro-v1:0"}`, want: "amazon.nova-micro-v1:0"},
+		{name: "chain mapping", model: "public", mapping: `{"public":"internal","internal":"amazon.nova-micro-v1:0"}`, want: "amazon.nova-micro-v1:0"},
+		{name: "self mapping", model: "same", mapping: `{"same":"same"}`, want: "same"},
+		{name: "cycle", model: "a", mapping: `{"a":"b","b":"a"}`, wantErr: true},
+		{name: "invalid json", model: "a", mapping: `{`, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ResolveModelMapping(tt.model, tt.mapping)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected err: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureStreamUsage(t *testing.T) {
 	// streaming request gains include_usage, model + messages preserved
 	out := EnsureStreamUsage([]byte(`{"model":"gpt-4o","stream":true,"messages":[{"role":"user","content":"hi"}]}`))

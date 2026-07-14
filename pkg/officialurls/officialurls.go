@@ -50,6 +50,19 @@ func normalizeHost(hostOrURL string) string {
 //     bare "s3.amazonaws.com" is rejected)
 //   - Vertex(41): "aiplatform.googleapis.com" or "{region}-aiplatform.googleapis.com"
 //     (regional host joins the region with a hyphen, so the hyphen form is allowed)
+//
+// HasOfficialHostRule reports whether a channel type has a measured dynamic
+// official-host rule (used when no single BaseURLs entry can exist, e.g. AWS
+// region hosts / Azure resources / Vertex regions).
+func HasOfficialHostRule(channelType int) bool {
+	switch channelType {
+	case 3, 33, 41, 59:
+		return true
+	default:
+		return false
+	}
+}
+
 func IsOfficialHostSuffix(channelType int, host string) bool {
 	h := normalizeHost(host)
 	if h == "" {
@@ -62,6 +75,12 @@ func IsOfficialHostSuffix(channelType int, host string) bool {
 		return strings.HasPrefix(h, "bedrock-runtime.") && strings.HasSuffix(h, ".amazonaws.com")
 	case 41:
 		return h == "aiplatform.googleapis.com" || strings.HasSuffix(h, "-aiplatform.googleapis.com")
+	case 59:
+		// Databricks per-workspace host: Azure Databricks (*.azuredatabricks.net)
+		// or AWS/GCP Databricks (*.cloud.databricks.com / *.gcp.databricks.com).
+		return strings.HasSuffix(h, ".azuredatabricks.net") ||
+			strings.HasSuffix(h, ".cloud.databricks.com") ||
+			strings.HasSuffix(h, ".gcp.databricks.com")
 	default:
 		return false
 	}
@@ -72,30 +91,30 @@ func IsOfficialHostSuffix(channelType int, host string) bool {
 // official default (custom / self-hosted / SDK-only providers); such a type can
 // never be classified as "official".
 var BaseURLs = []string{
-	"",                                          // 0  Unknown
-	"https://api.openai.com",                    // 1  OpenAI
-	"https://oa.api2d.net",                      // 2  Midjourney
-	"",                                          // 3  Azure (no default; per-resource endpoint)
-	"http://localhost:11434",                    // 4  Ollama
-	"https://api.openai-sb.com",                 // 5  MidjourneyPlus
-	"https://api.openaimax.com",                 // 6  OpenAIMax
-	"https://api.ohmygpt.com",                   // 7  OhMyGPT
-	"",                                          // 8  Custom (always user-supplied)
-	"https://api.caipacity.com",                 // 9  AILS
-	"https://api.aiproxy.io",                    // 10 AIProxy
-	"",                                          // 11 PaLM (no default)
-	"https://api.api2gpt.com",                   // 12 API2GPT
-	"https://api.aigc2d.com",                    // 13 AIGC2D
-	"https://api.anthropic.com",                 // 14 Anthropic
-	"https://aip.baidubce.com",                  // 15 Baidu
-	"https://open.bigmodel.cn",                  // 16 Zhipu
-	"https://dashscope.aliyuncs.com",            // 17 Ali
-	"",                                          // 18 Xunfei (no default)
-	"https://api.360.cn",                        // 19 360
-	"https://openrouter.ai/api",                 // 20 OpenRouter
-	"https://api.aiproxy.io",                    // 21 AIProxyLibrary
-	"https://fastgpt.run/api/openapi",           // 22 FastGPT
-	"https://hunyuan.tencentcloudapi.com",       // 23 Tencent
+	"",                                    // 0  Unknown
+	"https://api.openai.com",              // 1  OpenAI
+	"https://oa.api2d.net",                // 2  Midjourney
+	"",                                    // 3  Azure (no default; per-resource endpoint)
+	"http://localhost:11434",              // 4  Ollama
+	"https://api.openai-sb.com",           // 5  MidjourneyPlus
+	"https://api.openaimax.com",           // 6  OpenAIMax
+	"https://api.ohmygpt.com",             // 7  OhMyGPT
+	"",                                    // 8  Custom (always user-supplied)
+	"https://api.caipacity.com",           // 9  AILS
+	"https://api.aiproxy.io",              // 10 AIProxy
+	"",                                    // 11 PaLM (no default)
+	"https://api.api2gpt.com",             // 12 API2GPT
+	"https://api.aigc2d.com",              // 13 AIGC2D
+	"https://api.anthropic.com",           // 14 Anthropic
+	"https://aip.baidubce.com",            // 15 Baidu
+	"https://open.bigmodel.cn",            // 16 Zhipu
+	"https://dashscope.aliyuncs.com",      // 17 Ali
+	"",                                    // 18 Xunfei (no default)
+	"https://api.360.cn",                  // 19 360
+	"https://openrouter.ai/api",           // 20 OpenRouter
+	"https://api.aiproxy.io",              // 21 AIProxyLibrary
+	"https://fastgpt.run/api/openapi",     // 22 FastGPT
+	"https://hunyuan.tencentcloudapi.com", // 23 Tencent
 	"https://generativelanguage.googleapis.com", // 24 Gemini
 	"https://api.moonshot.cn",                   // 25 Moonshot
 	"https://open.bigmodel.cn",                  // 26 Zhipu_v4
@@ -131,6 +150,7 @@ var BaseURLs = []string{
 	"https://api.replicate.com",                 // 56 Replicate
 	"https://chatgpt.com",                       // 57 Codex
 	"",                                          // 58 AdvancedCustom (always user-supplied)
+	"",                                          // 59 Databricks (no default; per-workspace *.azuredatabricks.net host)
 }
 
 // For returns the official base URL for a channel type, or "" if the type id is
