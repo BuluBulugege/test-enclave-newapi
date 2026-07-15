@@ -167,6 +167,30 @@ func TestPrepareAWSBedrockRequestUsesOfficialHostAndSTS(t *testing.T) {
 	assert.Equal(t, "application/json", req.Header.Get("Accept"))
 }
 
+func TestPrepareAWSBedrockRequestPerModelRegion(t *testing.T) {
+	// The aggregated channel encodes each model's region as an "@<region>" suffix on
+	// the upstream model name. The enclave must dispatch to that region's host and
+	// SIGN with that region, NOT the credential's own region (us-east-1 here), while
+	// the model in the URL path drops the suffix.
+	body := []byte(`{"model":"x","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	now := time.Date(2026, 7, 15, 1, 2, 3, 0, time.UTC)
+
+	req, err := prepareAWSBedrockRequest(
+		context.Background(),
+		body,
+		"AKID|SECRET|us-east-1|SESSION",
+		"us.anthropic.claude-sonnet-4-5-20250929-v1:0@us-west-2",
+		false,
+		now,
+	)
+	require.NoError(t, err)
+	assert.Equal(t, "bedrock-runtime.us-west-2.amazonaws.com", req.URL.Host)
+	assert.Equal(t, "/model/us.anthropic.claude-sonnet-4-5-20250929-v1:0/invoke", req.URL.EscapedPath())
+	assert.NotContains(t, req.URL.EscapedPath(), "@", "the @region suffix must not leak into the URL path")
+	// SigV4 credential scope must use the per-model region, not the credential's.
+	assert.Contains(t, req.Header.Get("Authorization"), "/20260715/us-west-2/bedrock/aws4_request,")
+}
+
 func TestPrepareAWSBedrockRequestRejectsStream(t *testing.T) {
 	_, err := prepareAWSBedrockRequest(
 		context.Background(),

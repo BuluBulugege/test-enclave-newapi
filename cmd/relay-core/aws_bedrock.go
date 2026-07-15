@@ -297,7 +297,16 @@ func prepareAWSBedrockRequest(ctx context.Context, body []byte, rawCredentials, 
 	if err != nil {
 		return nil, err
 	}
-	host := "bedrock-runtime." + credentials.Region + ".amazonaws.com"
+	// Aggregated channel: an "<model>@<region>" upstream name pins THIS model to
+	// the region the deep-test probe found it in. IAM credentials are global, so
+	// only the host + SigV4 signing region change; a plain name (no suffix) falls
+	// back to the credential's own region.
+	region := credentials.Region
+	if m, r, ok := relaycontrol.SplitModelRegion(model); ok {
+		model = m
+		region = r
+	}
+	host := "bedrock-runtime." + region + ".amazonaws.com"
 	if !officialurls.IsOfficialHostSuffix(awsBedrockChannelType, host) {
 		return nil, errors.New("constructed AWS Bedrock host is not official")
 	}
@@ -309,7 +318,7 @@ func prepareAWSBedrockRequest(ctx context.Context, body []byte, rawCredentials, 
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	if err := officialurls.SignSigV4(req, converted, credentials.AccessKey, credentials.SecretKey, credentials.SessionToken, credentials.Region, awsBedrockService, now.UTC()); err != nil {
+	if err := officialurls.SignSigV4(req, converted, credentials.AccessKey, credentials.SecretKey, credentials.SessionToken, region, awsBedrockService, now.UTC()); err != nil {
 		return nil, fmt.Errorf("sign AWS Bedrock request: %w", err)
 	}
 	return req, nil
@@ -337,7 +346,13 @@ func (h *relayHandler) forwardAWSBedrock(ctx context.Context, w http.ResponseWri
 		_, _ = w.Write([]byte(`{"error":{"message":"AWS Bedrock upstream rejected the request","type":"relay_core_error"}}`))
 		return relaycontrol.Usage{}, resp.StatusCode, nil
 	}
-	converted, usage, err := convertNovaResponseToOpenAI(upstreamBody, model, requestID, time.Now().Unix())
+	// The response echoes the CLEAN model name (without the aggregated-channel
+	// "@region" routing suffix, which is a host-routing detail, not a model id).
+	responseModel := model
+	if m, _, ok := relaycontrol.SplitModelRegion(model); ok {
+		responseModel = m
+	}
+	converted, usage, err := convertNovaResponseToOpenAI(upstreamBody, responseModel, requestID, time.Now().Unix())
 	if err != nil {
 		return relaycontrol.Usage{}, resp.StatusCode, err
 	}

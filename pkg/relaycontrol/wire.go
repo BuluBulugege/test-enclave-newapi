@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"regexp"
 	"strings"
 )
 
@@ -342,6 +343,41 @@ func ResolveModelMapping(model, mappingJSON string) (string, error) {
 		visited[next] = true
 		current = next
 	}
+}
+
+// awsRegionPattern is the strict AWS region shape (e.g. "us-east-1",
+// "ap-southeast-2", "us-gov-west-1"). SplitModelRegion validates the region
+// against it so a malformed model mapping can never smuggle an arbitrary string
+// into a constructed Bedrock host or a SigV4 signing scope. It mirrors the same
+// pattern the deep-tester and the enclave credential parser use.
+var awsRegionPattern = regexp.MustCompile(`^[a-z]{2}(?:-gov)?-[a-z]+-\d+$`)
+
+// SplitModelRegion splits an aggregated-channel upstream model name of the form
+// "<model>@<region>" into its parts. This is the convention the AWS Bedrock
+// one-click aggregated channel uses so a SINGLE channel can dispatch each model
+// to the region the deep-test probe found it in: the channel's model mapping
+// value carries the region-specific upstream name plus an "@<region>" suffix, and
+// both the host relay and the SGX enclave decode it here to pick the Bedrock
+// region host (and SigV4 signing region) at request time. IAM credentials are
+// global, so only the host/region changes — never the key.
+//
+// ok is true only for a well-formed "<non-empty model>@<valid region>"; then
+// model is the part before '@' and region the validated part after it. For a
+// plain name (no '@') or an '@' with an invalid region, ok is false and model is
+// the ORIGINAL name unchanged, so callers fall back to the credential's own
+// region and a malformed suffix fails closed upstream rather than repointing the
+// host.
+func SplitModelRegion(name string) (model, region string, ok bool) {
+	at := strings.LastIndexByte(name, '@')
+	if at < 0 {
+		return name, "", false
+	}
+	model = name[:at]
+	region = name[at+1:]
+	if model == "" || !awsRegionPattern.MatchString(region) {
+		return name, "", false
+	}
+	return model, region, true
 }
 
 // EnsureStreamUsage returns body with stream_options.include_usage=true for an

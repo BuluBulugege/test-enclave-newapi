@@ -33,6 +33,57 @@ func TestPeekRequestNoModel(t *testing.T) {
 	}
 }
 
+func TestSplitModelRegion(t *testing.T) {
+	tests := []struct {
+		name       string
+		in         string
+		wantModel  string
+		wantRegion string
+		wantOK     bool
+	}{
+		{
+			name:       "profile id with region",
+			in:         "us.anthropic.claude-sonnet-4-5-20250929-v1:0@us-east-1",
+			wantModel:  "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+			wantRegion: "us-east-1",
+			wantOK:     true,
+		},
+		{
+			name:       "gov region",
+			in:         "anthropic.claude-opus-4-8@us-gov-west-1",
+			wantModel:  "anthropic.claude-opus-4-8",
+			wantRegion: "us-gov-west-1",
+			wantOK:     true,
+		},
+		{
+			name:      "plain model, no suffix",
+			in:        "anthropic.claude-opus-4-8",
+			wantModel: "anthropic.claude-opus-4-8",
+			wantOK:    false,
+		},
+		{
+			name:      "invalid region fails closed, model unchanged",
+			in:        "anthropic.claude-opus-4-8@us-east-1.evil.com",
+			wantModel: "anthropic.claude-opus-4-8@us-east-1.evil.com",
+			wantOK:    false,
+		},
+		{
+			name:      "empty model before @",
+			in:        "@us-east-1",
+			wantModel: "@us-east-1",
+			wantOK:    false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model, region, ok := SplitModelRegion(tt.in)
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantModel, model)
+			assert.Equal(t, tt.wantRegion, region)
+		})
+	}
+}
+
 func TestPeekUsage(t *testing.T) {
 	body := []byte(`{"id":"x","usage":{"prompt_tokens":12,"completion_tokens":3,"total_tokens":15}}`)
 	u, ok := PeekUsage(body)
